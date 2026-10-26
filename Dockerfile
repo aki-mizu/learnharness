@@ -28,7 +28,7 @@ RUN apt-get update \
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    HOSTNAME=0.0.0.0 \
+    HOSTNAME=127.0.0.1 \
     PORT=3000 \
     CHROME_PATH=/usr/bin/chromium \
     LH_DATA_DIR=/state/data \
@@ -36,10 +36,10 @@ ENV NODE_ENV=production \
 
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder /app/LICENSE ./LICENSE
-COPY --chown=node:node scripts/server-gateway.mjs ./server-gateway.mjs
+COPY --chown=node:node scripts/server-gateway.mjs scripts/start-container.mjs ./
 RUN mkdir -p /state/data .next/cache \
     && chown -R node:node /state .next/cache
 
 USER node
-EXPOSE 3000 8080 8081
-CMD ["node", "server.js"]
+EXPOSE 8080 8081
+CMD ["node", "start-container.mjs"]

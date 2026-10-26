@@ -76,7 +76,7 @@ test("gateway configuration requires a key before either listener can start", ()
 	}
 	const configuration = readGatewayConfiguration({ LH_SERVER_API_KEY: KEY, HOSTNAME: "unrelated-container-hostname" });
 	assert.deepEqual(configuration, {
-		apiKey: KEY, upstreamUrl: "http://learnharness:3000", webPort: 8080, apiPort: 8081, host: "0.0.0.0",
+		apiKey: KEY, upstreamUrl: "http://127.0.0.1:3000", webPort: 8080, apiPort: 8081, host: "0.0.0.0",
 	});
 	for (const value of ["file:///private/data", "http://name:secret@server", "http://server/path", "http://server?key=secret", "http://server/#secret"]) {
 		assert.throws(() => readGatewayConfiguration({ LH_SERVER_API_KEY: KEY, LH_UPSTREAM_URL: value }), /LH_UPSTREAM_URL/);

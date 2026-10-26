@@ -1,5 +1,5 @@
 /** Two listeners, one application: LAN web UI and authenticated public API.
- * The Next backend is internal to the Compose network and owns all state.
+ * The Next backend is private to the container and owns all state.
  */
 import { timingSafeEqual } from "node:crypto";
 import * as http from "node:http";
@@ -41,7 +41,7 @@ function port(value, name, allowEphemeral = false) {
 export function readGatewayConfiguration(env = process.env) {
 	return {
 		apiKey: requiredKey(env.LH_SERVER_API_KEY),
-		upstreamUrl: origin(env.LH_UPSTREAM_URL ?? "http://learnharness:3000").origin,
+		upstreamUrl: origin(env.LH_UPSTREAM_URL ?? "http://127.0.0.1:3000").origin,
 		webPort: port(env.LH_WEB_PORT ?? "8080", "LH_WEB_PORT"),
 		apiPort: port(env.LH_API_PORT ?? "8081", "LH_API_PORT"),
 		host: "0.0.0.0",
@@ -101,7 +101,7 @@ function listen(server, listenPort, host) {
 	});
 }
 
-export function createServerGateway({ apiKey, upstreamUrl = "http://learnharness:3000", webPort = 8080, apiPort = 8081, host = "0.0.0.0" }) {
+export function createServerGateway({ apiKey, upstreamUrl = "http://127.0.0.1:3000", webPort = 8080, apiPort = 8081, host = "0.0.0.0" }) {
 	const expected = Buffer.from(requiredKey(apiKey));
 	const upstream = origin(upstreamUrl);
 	webPort = port(webPort, "LH_WEB_PORT", true);

@@ -7,40 +7,6 @@ services:
     restart: unless-stopped
     init: true
 
-    environment:
-      NODE_ENV: production
-      NEXT_TELEMETRY_DISABLED: "1"
-      HOSTNAME: "0.0.0.0"
-      LH_DATA_DIR: /state/data
-      LH_AUTH_FILE: /state/auth.json
-      CHROME_PATH: /usr/bin/chromium
-
-    volumes:
-      - learnharness_state:/state
-
-    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - "fetch('http://127.0.0.1:'+process.env.PORT+'/api/graph',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-      interval: 30s
-      timeout: 10s
-      start_period: 30s
-      retries: 3
-
-    stop_grace_period: 60s
-
-  gateway:
-    image: "${LEARNHARNESS_IMAGE:-ghcr.io/aki-mizu/learnharness:docker-0.3.7}"
-    pull_policy: "${LEARNHARNESS_PULL_POLICY:-always}"
-    command: ["node", "server-gateway.mjs"]
-    restart: unless-stopped
-    init: true
-    depends_on:
-      learnharness:
-        condition: service_healthy
-
     ports:
       # Keep the website's existing interface and port settings.
       - target: &web_port 8080
@@ -51,9 +17,17 @@ services:
         host_ip: "${API_BIND_IP:-0.0.0.0}"
 
     environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      LH_DATA_DIR: /state/data
+      LH_AUTH_FILE: /state/auth.json
+      CHROME_PATH: /usr/bin/chromium
       LH_WEB_PORT: *web_port
       LH_API_PORT: *api_port
       LH_SERVER_API_KEY: "${LH_SERVER_API_KEY:?Set LH_SERVER_API_KEY to a random server API key}"
+
+    volumes:
+      - learnharness_state:/state
 
     healthcheck:
       test:
@@ -65,6 +39,8 @@ services:
       timeout: 10s
       start_period: 30s
       retries: 3
+
+    stop_grace_period: 60s
 
 volumes:
   learnharness_state:

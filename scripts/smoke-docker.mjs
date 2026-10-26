@@ -1,7 +1,8 @@
 /**
  * Exercise the final Docker image through the Portainer Compose file. Uses a
- * unique project/volume, a random loopback port, and a dummy key that is never
- * sent to a provider. Recreates the container to verify durable storage.
+ * unique project/volume, random loopback ports, and a dummy key that is never
+ * sent to a provider. Verifies the single-container deployment and recreates
+ * that container to verify durable storage.
  *
  * docker build -t learnharness:local . && node scripts/smoke-docker.mjs
  */
@@ -37,7 +38,7 @@ import fs from 'node:fs';
 const title = 'Docker persistence smoke';
 const dummyKey = 'docker-smoke-not-a-real-provider-key';
 async function request(route, method = 'GET', body) {
-  const response = await fetch('http://127.0.0.1:3000' + route, {
+  const response = await fetch('http://127.0.0.1:' + process.env.LH_WEB_PORT + route, {
     method, signal: AbortSignal.timeout(10000),
     ...(body === undefined ? {} : { headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) }),
   });
@@ -53,8 +54,10 @@ function probe(code) {
 
 try {
 	compose(["up", "--detach", "--wait", "--wait-timeout", "90"]);
-	const address = compose(["port", "gateway", "8080"]);
-	const apiAddress = compose(["port", "gateway", "8081"]);
+	const containers = compose(["ps", "--all", "--quiet"]).split(/\r?\n/).filter(Boolean);
+	assert.equal(containers.length, 1, "website, API and backend run in one container");
+	const address = compose(["port", "learnharness", "8080"]);
+	const apiAddress = compose(["port", "learnharness", "8081"]);
 	const response = await fetch(`http://${address}/api/graph`, { signal: AbortSignal.timeout(10000) });
 	assert.equal(response.status, 200, "website keeps its same-origin API access");
 	await response.arrayBuffer();
