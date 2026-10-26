@@ -153,7 +153,7 @@ export function ThinkingMenuList({
 	empty,
 	footer,
 }: {
-	levels: string[];
+	levels: readonly string[];
 	effectiveLevel: string | undefined;
 	onPick: (level: string) => void;
 	/** Shown instead of the list when there are no levels. */
