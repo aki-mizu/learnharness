@@ -1,7 +1,7 @@
 /** Persistent configuration for API-managed OpenAI-compatible connections. */
 export const CUSTOM_PROVIDER_PREFIX = "custom-";
 export const CUSTOM_MODEL_CONTEXT_WINDOW = 32_768;
-export const CUSTOM_MODEL_MAX_TOKENS = 4_096;
+export const CUSTOM_MODEL_MAX_TOKENS = 16_384;
 export const CUSTOM_THINKING_LEVELS = ["medium", "xhigh"] as const;
 export const CUSTOM_DEFAULT_THINKING_LEVEL = "xhigh";
 
