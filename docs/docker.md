@@ -69,18 +69,19 @@ Provider API keys are not needed for building or smoke checks.
 
 1. Open **Stacks → Add stack → Web editor** and paste the repository's
    [`compose.yaml`](../compose.yaml).
-2. Set these stack environment variables:
+2. The stack works without environment variables, listening on port `3000` on
+   all server interfaces. Optionally set these stack environment variables:
 
    | Variable | Value |
    | --- | --- |
-   | `BIND_IP` | The server's LAN/VPN IP address, or `127.0.0.1` for a reverse proxy running on the host |
-   | `HOST_PORT` | An unused host port, for example `3000` |
+   | `BIND_IP` | Defaults to `0.0.0.0` (all interfaces). Set a LAN/VPN IP to restrict the interface, or `127.0.0.1` for a reverse proxy running on the host |
+   | `HOST_PORT` | Defaults to `3000`. Change it if that host port is already in use |
    | `LEARNHARNESS_IMAGE` | Optional: override the default image, for example to pin `ghcr.io/aki-mizu/learnharness:sha-<full-commit-sha>` |
 
 3. Ensure the image is published and accessible, then deploy the stack.
    Compose pulls from GHCR on deployment by default. For a private package,
    configure Portainer's registry credentials as described above.
-4. Open `http://<BIND_IP>:<HOST_PORT>`. In Settings, add provider API keys and
+4. Open `http://<server-ip>:3000`, or use your chosen host port. In Settings, add provider API keys and
    configure the strong, cheap, and vision model slots needed by your workflow.
 
 The same Compose file can be used without Portainer:
@@ -100,7 +101,8 @@ LEARNHARNESS_IMAGE=learnharness:local LEARNHARNESS_PULL_POLICY=never \
   BIND_IP=127.0.0.1 HOST_PORT=3000 docker compose up -d --wait
 ```
 
-Web mode has no built-in user login. Bind it to a trusted LAN/VPN, or place it
+Web mode has no built-in user login. The default binding accepts connections on
+all server interfaces. Restrict access to a trusted LAN/VPN, or place it
 behind an authenticated HTTPS reverse proxy. For a reverse proxy in another
 container, configure a shared Docker network and its upstream appropriately;
 that container's `127.0.0.1` is not the LearnHarness container or Docker host.
