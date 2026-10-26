@@ -7,9 +7,6 @@ services:
     restart: unless-stopped
     init: true
 
-    ports:
-      - "${BIND_IP:-0.0.0.0}:${HOST_PORT:-3000}:3000"
-
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
@@ -34,6 +31,38 @@ services:
       retries: 3
 
     stop_grace_period: 60s
+
+  gateway:
+    image: "${LEARNHARNESS_IMAGE:-ghcr.io/aki-mizu/learnharness:docker-0.3.7}"
+    pull_policy: "${LEARNHARNESS_PULL_POLICY:-always}"
+    command: ["node", "server-gateway.mjs"]
+    restart: unless-stopped
+    init: true
+    depends_on:
+      learnharness:
+        condition: service_healthy
+
+    ports:
+      # Keep the website's existing interface and port settings.
+      - "${BIND_IP:-0.0.0.0}:${HOST_PORT:-3000}:8080"
+      - "${API_BIND_IP:-0.0.0.0}:${API_PORT:-3005}:8081"
+
+    environment:
+      LH_UPSTREAM_URL: http://learnharness:3000
+      LH_WEB_PORT: "8080"
+      LH_API_PORT: "8081"
+      LH_SERVER_API_KEY: "${LH_SERVER_API_KEY:?Set LH_SERVER_API_KEY to a random server API key}"
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8081/api/graph',{headers:{Authorization:'Bearer '+process.env.LH_SERVER_API_KEY},signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
 volumes:
   learnharness_state:

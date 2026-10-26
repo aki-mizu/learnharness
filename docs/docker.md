@@ -1,6 +1,8 @@
 # Docker and Portainer
 
-Run the web UI and HTTP API together in one container. The image uses Node 24
+Run one LearnHarness backend with separate website and authenticated API ports.
+A stateless gateway uses the same image and forwards both ports to the single
+backend and state volume. The image uses Node 24
 on Debian Bookworm, runs as the non-root `node` user (UID/GID 1000), and includes
 Chromium for generated demo verification. Native PDF/SVG renderers, prompts,
 and static assets are included in the standalone application payload.
@@ -69,25 +71,41 @@ Provider API keys are not needed for building or smoke checks.
 
 1. Open **Stacks → Add stack → Web editor** and paste the repository's
    [`compose.yaml`](../compose.yaml).
-2. The stack works without environment variables, listening on port `3000` on
-   all server interfaces. Optionally set these stack environment variables:
+2. Set **`LH_SERVER_API_KEY`** to a random secret. For example, generate one
+   locally with `openssl rand -hex 32`, then paste it into Portainer's stack
+   environment variables. This is a server access key, separate from OpenRouter
+   and custom model-provider keys. The gateway refuses to start without it.
+
+   The website keeps its existing binding: port `3000` on all interfaces by
+   default. The API has its own port, `3005` by default. Stack variables are:
 
    | Variable | Value |
    | --- | --- |
+   | `LH_SERVER_API_KEY` | Required: the secret clients send to the API port |
    | `BIND_IP` | Defaults to `0.0.0.0` (all interfaces). Set a LAN/VPN IP to restrict the interface, or `127.0.0.1` for a reverse proxy running on the host |
-   | `HOST_PORT` | Defaults to `3000`. Change it if that host port is already in use |
+   | `HOST_PORT` | Website port; defaults to `3000`. Keep your existing value, such as `3004` |
+   | `API_BIND_IP` | API interface; defaults to `0.0.0.0` |
+   | `API_PORT` | Separate API port; defaults to `3005` |
    | `LEARNHARNESS_IMAGE` | Optional: override the default image, for example to pin `ghcr.io/aki-mizu/learnharness:sha-<full-commit-sha>` |
 
 3. Ensure the image is published and accessible, then deploy the stack.
    Compose pulls from GHCR on deployment by default. For a private package,
    configure Portainer's registry credentials as described above.
-4. Open `http://<server-ip>:3000`, or use your chosen host port. In Settings, add provider API keys and
-   configure the strong, cheap, and vision model slots needed by your workflow.
+4. Open `http://<server-ip>:3000`, or use your existing `HOST_PORT`, for the
+   website. LAN access is preserved and no browser sign-in is added. In Settings,
+   add provider API keys and configure the strong, cheap, and vision model slots.
+5. In Portal's **Settings → LearnHarness**, use `http://<server-ip>:3005` (or your
+   chosen `API_PORT`) and enter the **Server API Key**. Portal saves the key in
+   the device Keychain. Disconnect removes the saved key.
+
+For the existing website on port `3004`, keep `HOST_PORT=3004` and add
+`API_PORT=3005` plus `LH_SERVER_API_KEY`. The named data volume stays the same.
 
 The same Compose file can be used without Portainer:
 
 ```bash
-BIND_IP=127.0.0.1 HOST_PORT=3000 docker compose up -d --wait
+export LH_SERVER_API_KEY='<your-random-server-key>'
+HOST_PORT=3004 API_PORT=3005 docker compose up -d --wait
 ```
 
 For private images outside Portainer, run `docker login ghcr.io` first with
@@ -98,15 +116,36 @@ both overrides:
 
 ```bash
 LEARNHARNESS_IMAGE=learnharness:local LEARNHARNESS_PULL_POLICY=never \
-  BIND_IP=127.0.0.1 HOST_PORT=3000 docker compose up -d --wait
+  HOST_PORT=3004 API_PORT=3005 docker compose up -d --wait
 ```
 
-Web mode has no built-in user login. The default binding accepts connections on
-all server interfaces. Restrict access to a trusted LAN/VPN, or place it
-behind an authenticated HTTPS reverse proxy. For a reverse proxy in another
-container, configure a shared Docker network and its upstream appropriately;
-that container's `127.0.0.1` is not the LearnHarness container or Docker host.
-The web UI and `/api/*` endpoints share the same port and access boundary.
+The website port retains its current access boundary, including the same-origin
+APIs it needs for browser chat, settings, and downloads. **Expose only the API
+port publicly.** Keep the website port on your LAN/VPN; it remains accessible
+without a key. The API port accepts only `/api` and `/api/*`, requires
+`Authorization: Bearer <LH_SERVER_API_KEY>` for every method and stream, and
+returns `404` for website routes. Missing or incorrect keys return `401`.
+Keys in query strings or cookies do not authenticate the API port.
+
+For public access, terminate HTTPS at a reverse proxy pointing to the **API
+port**. Tailscale clients can use the server's Tailscale address instead. For a
+reverse proxy in another container, configure a shared Docker network and its
+upstream appropriately; that container's `127.0.0.1` is not the LearnHarness
+container or Docker host. The Next.js backend itself has no published host port;
+both published listeners belong to the gateway.
+
+Check API access from a shell with the key in an environment variable:
+
+```bash
+curl -fsS -H "Authorization: Bearer $LH_SERVER_API_KEY" \
+  http://<server-ip>:3005/api/chats
+```
+
+Change `LH_SERVER_API_KEY` in the stack and redeploy to rotate it, then reconnect
+Portal with the new key. The gateway does not store this key in the data volume
+or expose it through provider-key settings. Plain `npm start` still serves the
+combined website/API listener; the split authenticated entry point is provided
+by this gateway deployment.
 
 A reverse proxy must pass SSE responses without buffering and allow long-lived
 connections. With nginx, use `proxy_buffering off` and a suitable
@@ -145,7 +184,7 @@ Without Portainer, use the same `BIND_IP` and `HOST_PORT` values as the first
 deployment:
 
 ```bash
-BIND_IP=127.0.0.1 HOST_PORT=3000 docker compose up -d --force-recreate --wait
+HOST_PORT=3004 API_PORT=3005 docker compose up -d --force-recreate --wait
 ```
 
 If you pinned a commit image, change `LEARNHARNESS_IMAGE` to the desired commit
@@ -153,9 +192,12 @@ tag before redeploying. For local builds, rebuild `learnharness:local` first and
 keep `LEARNHARNESS_IMAGE=learnharness:local` and
 `LEARNHARNESS_PULL_POLICY=never` set during recreation.
 
-The health check probes `/api/graph`. The complete container smoke test uses a
+The backend health check probes its internal `/api/graph`; the gateway health
+check probes its API listener with the configured server key. The complete
+container smoke test uses a
 separate project and temporary named volume; it checks the published port,
-non-root startup, static assets, API writes, SSE, native PDF/SVG rendering,
+non-root startup, both published ports, missing/wrong-key rejection, website
+route isolation on the API port, static assets, API writes, SSE, native PDF/SVG rendering,
 Chromium, and persistence after replacing the container:
 
 ```bash

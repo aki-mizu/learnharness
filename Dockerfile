@@ -36,9 +36,10 @@ ENV NODE_ENV=production \
 
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder /app/LICENSE ./LICENSE
+COPY --chown=node:node scripts/server-gateway.mjs ./server-gateway.mjs
 RUN mkdir -p /state/data .next/cache \
     && chown -R node:node /state .next/cache
 
 USER node
-EXPOSE 3000
+EXPOSE 3000 8080 8081
 CMD ["node", "server.js"]

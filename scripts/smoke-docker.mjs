@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -16,6 +16,8 @@ const project = `lh-docker-smoke-${randomUUID()}`;
 const env = {
 	...process.env,
 	BIND_IP: "127.0.0.1", HOST_PORT: "0",
+	API_BIND_IP: "127.0.0.1", API_PORT: "0",
+	LH_SERVER_API_KEY: randomBytes(32).toString("hex"),
 	LEARNHARNESS_IMAGE: "learnharness:local", LEARNHARNESS_PULL_POLICY: "never",
 };
 
@@ -51,10 +53,37 @@ function probe(code) {
 
 try {
 	compose(["up", "--detach", "--wait", "--wait-timeout", "90"]);
-	const address = compose(["port", "learnharness", "3000"]);
+	const address = compose(["port", "gateway", "8080"]);
+	const apiAddress = compose(["port", "gateway", "8081"]);
 	const response = await fetch(`http://${address}/api/graph`, { signal: AbortSignal.timeout(10000) });
-	assert.equal(response.status, 200, "API reachable through the published port");
+	assert.equal(response.status, 200, "website keeps its same-origin API access");
 	await response.arrayBuffer();
+	const website = await fetch(`http://${address}/`, { signal: AbortSignal.timeout(10000) });
+	assert.equal(website.status, 200, "website remains reachable without API-key sign-in");
+	assert.match(await website.text(), /<html/);
+
+	async function publicApi(route, key, method = "GET") {
+		return fetch(`http://${apiAddress}${route}`, {
+			method, redirect: "manual", signal: AbortSignal.timeout(10000),
+			headers: key === undefined ? {} : { Authorization: `Bearer ${key}` },
+		});
+	}
+	for (const method of ["GET", "POST", "HEAD", "OPTIONS"]) {
+		const denied = await publicApi("/api/chats", undefined, method);
+		assert.equal(denied.status, 401, `public API requires a key for ${method}`);
+		await denied.arrayBuffer();
+	}
+	const wrongKey = await publicApi("/api/chats", "wrong-key");
+	assert.equal(wrongKey.status, 401, "public API rejects an incorrect key");
+	await wrongKey.arrayBuffer();
+	const authorized = await publicApi("/api/graph", env.LH_SERVER_API_KEY);
+	assert.equal(authorized.status, 200, "public API accepts the configured key");
+	await authorized.arrayBuffer();
+	for (const route of ["/", "/chat/new", "/_next/static/test.js", "/apix"]) {
+		const blocked = await publicApi(route, env.LH_SERVER_API_KEY);
+		assert.equal(blocked.status, 404, `API port blocks website route ${route}`);
+		await blocked.arrayBuffer();
+	}
 
 	probe(String.raw`
 const html = await (await request('/')).text();
@@ -74,6 +103,17 @@ assert.equal(JSON.parse(fs.readFileSync('/state/auth.json', 'utf8')).OPENAI_API_
 assert.equal(fs.statSync('/state/auth.json').mode & 0o777, 0o600, 'key file permissions');
 console.log('[smoke-docker] non-root startup, static assets, APIs, SSE and writes passed');
 `);
+	const chats = await (await publicApi("/api/chats", env.LH_SERVER_API_KEY)).json();
+	const publishedChat = chats.chats.find(chat => chat.title === "Docker persistence smoke");
+	assert.ok(publishedChat, "authenticated API sees the same state as the website");
+	const exportedStream = await publicApi(`/api/chats/${publishedChat.id}/stream`, env.LH_SERVER_API_KEY);
+	assert.equal(exportedStream.status, 200);
+	assert.match(exportedStream.headers.get("Content-Type"), /text\/event-stream/);
+	assert.match(await exportedStream.text(), /\[DONE\]/);
+	const hiddenChatPage = await publicApi(`/chat/${publishedChat.id}`, env.LH_SERVER_API_KEY);
+	assert.equal(hiddenChatPage.status, 404, "public API never renders a conversation page");
+	await hiddenChatPage.arrayBuffer();
+	console.log("[smoke-docker] separate web/API ports, mandatory key, page isolation and gateway SSE passed");
 
 	const pdf = readFileSync(path.join(ROOT, "tests/fixtures/sample-3page.pdf")).toString("base64");
 	probe(String.raw`

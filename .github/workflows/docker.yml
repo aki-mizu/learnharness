@@ -31,6 +31,7 @@ jobs:
         env:
           BIND_IP: "127.0.0.1"
           HOST_PORT: "3000"
+          LH_SERVER_API_KEY: "docker-compose-validation-not-a-real-server-key"
       - name: Build the production image
         run: |
           docker build --platform linux/amd64 \
