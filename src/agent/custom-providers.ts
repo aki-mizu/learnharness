@@ -76,6 +76,16 @@ function customProvider(record: CustomProviderRecord) {
 		},
 		models: record.models.map((model): Model<"openai-completions"> => ({
 			...model,
+			reasoning: true,
+			thinkingLevelMap: {
+				off: null,
+				minimal: null,
+				low: null,
+				medium: "medium",
+				high: null,
+				xhigh: "xhigh",
+				max: null,
+			},
 			api: "openai-completions",
 			provider: record.id,
 			baseUrl: record.baseUrl,
@@ -84,6 +94,7 @@ function customProvider(record: CustomProviderRecord) {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			compat: {
 				maxTokensField: "max_tokens",
+				supportsReasoningEffort: true,
 				supportsDeveloperRole: false,
 				supportsStore: false,
 				supportsStrictMode: false,

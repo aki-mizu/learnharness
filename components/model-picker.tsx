@@ -10,6 +10,7 @@ import { MenuShell } from "@/components/menu-shell";
 import { Hint } from "@/components/ui/hint";
 import { notifySettingsSaved, onSettingsSaved, useSettingsSaved } from "@/components/settings-signal";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
+import { CUSTOM_THINKING_LEVELS, isCustomProviderId } from "@/src/core/custom-providers";
 
 /** GET /api/models is cached per page load for instant menu opens, but
  *  the federation is LIVE per call — keys saved mid-session widen the
@@ -143,12 +144,11 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 	const entry = catalog?.models.find(
 		(m) => m.id === effectiveId && m.provider === effectiveProvider,
 	);
-	const levels = entry?.supportedLevels ?? [];
-	// Legacy display (chunk 2 item 4, owner): a record with a model but no
-	// stored level shows the RESOLVED level — the ordering's first supported
-	// — because that is exactly what the engine build would run. Display-
-	// only: the record stays unset until a fresh pick populates it.
-	const effectiveLevel = storedLevel ?? (entry ? defaultOrderLevel(levels) : undefined);
+	const customProvider = isCustomProviderId(effectiveProvider ?? "");
+	const levels: readonly ThinkingLevel[] = customProvider ? CUSTOM_THINKING_LEVELS : entry?.supportedLevels ?? [];
+	// Show the stored level, or the provider's default for an unset pin.
+	// This display does not write the record.
+	const effectiveLevel = storedLevel ?? (entry ? defaultOrderLevel(levels, effectiveProvider) : undefined);
 
 	// The intuitive dropdown contract (owner, stats-control round 1): any
 	// click outside the open menu — or an Esc keypress — closes it. The
@@ -287,19 +287,11 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 		return () => window.removeEventListener("lh:kbd-cycle-thinking", onCycleThinking);
 	}, [levels, effectiveLevel, effectiveProvider, effectiveId, apply]);
 
-	// Selecting a model (click and Enter share one path): keep the
-	// thinking level only when the new model supports it — otherwise
-	// drop it (a carry-over would 400 at the server's catalog gate).
+	// Click and Enter share the same provider-aware thinking assignment.
 	const pickModel = (m: ModelCatalogEntry) => {
-		// Auto-populate (chunk 2, owner: "populate everywhere"): a fresh pick
-		// ALWAYS writes a level — the STORED one rides as-is (the write clamps
-		// server-side when the new model doesn't support it; the signal
-		// re-reads and the clamped truth displays), and a record with no
-		// stored level populates the ordering's level. The unset state can
-		// never re-enter through this door. (The DERIVED display level never
-		// rides — it belongs to the OLD model; the fresh pick's level comes
-		// from the fresh model's own ladder.)
-		const nextLevel = populateLevel(storedLevel, m.supportedLevels);
+		// Custom picks keep medium or use xhigh; built-in picks retain the
+		// stored level for server clamping or populate their default order.
+		const nextLevel = populateLevel(storedLevel, m.supportedLevels, m.provider);
 		apply(m.provider, m.id, nextLevel);
 	};
 

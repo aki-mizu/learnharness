@@ -47,6 +47,7 @@ import { ProviderMenuList } from "@/components/settings/model-menu";
 import { ChatGPTBackgroundAccess } from "@/components/settings/chatgpt-connection";
 import { NativeSubscriptionBackgroundAccess, SubscriptionConnections } from "@/components/settings/subscription-connections";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
+import { CUSTOM_THINKING_LEVELS, isCustomProviderId } from "@/src/core/custom-providers";
 import { ThinkingMenuList } from "@/components/settings/model-menu";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
@@ -98,16 +99,14 @@ export function prefillFromSlots(
 	return pre;
 }
 
-/** Level prefill (chunk 2): a pinned tier opens with its STORED level
- *  as-is (Save clamps server-side if the ladder lapsed), else the
- *  ordering's level for that model — the level a fresh pick would
- *  populate (owner: the ordering's only purpose is first assignment).
+/** Pinned tiers keep their stored level, or populate the provider's
+ *  default on first pick.
  *  Exported pure for tests. */
 export function prefillLevelFromPin(
 	entry: ModelCatalogEntry,
 	pin: { thinkingLevel?: ThinkingLevel } | null | undefined,
 ): ThinkingLevel {
-	return populateLevel(pin?.thinkingLevel, entry.supportedLevels);
+	return pin?.thinkingLevel ?? defaultOrderLevel(entry.supportedLevels, entry.provider);
 }
 
 /** Stage 1's pure body — exported for SSR pins (the delete/settings
@@ -232,8 +231,8 @@ export function SetupDialog({
 	const [body, setBody] = useState<ModelsBody | null>(null);
 	const [failed, setFailed] = useState(false);
 	const [picked, setPicked] = useState<Partial<Record<ModelSlotName, ModelCatalogEntry>>>({});
-	/** Per-slot thinking level (chunk 2): populated from the ordering on
-	 *  every fresh model pick, editable — an explicit pick always wins. */
+	/** Per-slot thinking level, populated using the picked provider's
+	 *  assignment policy and editable through that model's choices. */
 	const [levels, setLevels] = useState<Partial<Record<ModelSlotName, ThinkingLevel>>>({});
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -378,9 +377,10 @@ export function SetupDialog({
 		setError(null);
 		const models: ModelsSettings = {};
 		for (const slot of SLOT_ORDER) {
+			const entry = picked[slot]!;
 			const level = levels[slot];
 			models[slot] = {
-				model: { provider: picked[slot]!.provider, id: picked[slot]!.id },
+				model: { provider: entry.provider, id: entry.id },
 				...(level ? { thinkingLevel: level } : {}),
 			};
 		}
@@ -460,8 +460,9 @@ export function SetupDialog({
 						</p>
 						{SLOT_ORDER.map((slot) => {
 							const entry = picked[slot];
+							const customProvider = isCustomProviderId(entry?.provider ?? "");
+							const levelsForEntry = customProvider ? CUSTOM_THINKING_LEVELS : entry?.supportedLevels ?? [];
 							const level = levels[slot];
-							const levelsForEntry = entry?.supportedLevels ?? [];
 							const catalog =
 								slot === "vision" ? body?.models.filter((m) => m.input.includes("image")) : body?.models;
 							return (
@@ -517,13 +518,11 @@ export function SetupDialog({
 														effectiveProvider={entry?.provider}
 														onPick={(m) => {
 															setPicked((prev) => ({ ...prev, [slot]: m }));
-															// Auto-populate (chunk 2, owner: "populate
-															// everywhere"): no explicit level → the
-															// ordering's level for the fresh pick; an
-															// explicit one rides (Save clamps server-side).
+															// Custom picks keep medium or use xhigh;
+															// built-in picks retain their existing policy.
 															setLevels((prev) => ({
 																...prev,
-																[slot]: populateLevel(prev[slot], m.supportedLevels),
+																[slot]: populateLevel(prev[slot], m.supportedLevels, m.provider),
 															}));
 															setOpenMenu(null);
 														}}
