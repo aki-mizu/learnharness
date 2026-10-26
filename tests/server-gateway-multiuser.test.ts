@@ -71,7 +71,7 @@ function bearer(apiKey: string) {
 	return { Authorization: `Bearer ${apiKey}` };
 }
 
-async function fixture(t: TestContext, webApiKey = PRIMARY_KEY) {
+async function fixture(t: TestContext, webApiKey = PRIMARY_KEY, referencedKeys = false) {
 	const applications = await Promise.all([
 		{ id: "primary", apiKey: PRIMARY_KEY },
 		{ id: "secondary", apiKey: SECONDARY_KEY },
@@ -124,7 +124,14 @@ async function fixture(t: TestContext, webApiKey = PRIMARY_KEY) {
 		await worker.start();
 		return { id, apiKey, app, worker, received, sessions, streamClosures, upstreamUrl: `http://${HOST}:${serverPort(worker.server)}` };
 	}));
-	const users = applications.map(({ id, apiKey, upstreamUrl }) => ({ id, apiKey, upstreamUrl }));
+	const users = referencedKeys ? readGatewayConfiguration({
+		LH_SERVER_USERS: JSON.stringify(applications.map(({ id, upstreamUrl }) => ({
+			id, apiKeyEnv: id === "primary" ? "CUSTOM_PRIMARY_KEY" : "CUSTOM_SECONDARY_KEY", upstreamUrl,
+		}))),
+		LH_WEB_API_KEY: webApiKey,
+		CUSTOM_PRIMARY_KEY: PRIMARY_KEY,
+		CUSTOM_SECONDARY_KEY: SECONDARY_KEY,
+	}).users : applications.map(({ id, apiKey, upstreamUrl }) => ({ id, apiKey, upstreamUrl }));
 	const routers: Router[] = [];
 	t.after(async () => { await Promise.all(routers.map((router) => router.close())); });
 	async function routerFor(nextUsers = users, selectedKey = webApiKey) {
@@ -147,6 +154,95 @@ test("multiuser configuration selects a configured web key and keeps stable user
 	assert.deepEqual(readGatewayConfiguration({ LH_SERVER_USERS: JSON.stringify(users), LH_WEB_API_KEY: SECONDARY_KEY }), {
 		users, webApiKey: SECONDARY_KEY, webPort: 8080, apiPort: 8081, host: "0.0.0.0",
 	});
+});
+
+test("multiuser configuration resolves custom key variables alongside unchanged literal keys", () => {
+	const configuration = readGatewayConfiguration({
+		LH_SERVER_USERS: JSON.stringify([
+			{ id: "primary", apiKeyEnv: "CUSTOM_PRIMARY_KEY", upstreamUrl: "http://primary:8081/" },
+			{ id: "secondary", apiKey: SECONDARY_KEY, upstreamUrl: "http://secondary:8081" },
+		]),
+		LH_WEB_API_KEY: PRIMARY_KEY,
+		CUSTOM_PRIMARY_KEY: PRIMARY_KEY,
+	});
+	assert.deepEqual(configuration.users, [
+		{ id: "primary", apiKey: PRIMARY_KEY, upstreamUrl: "http://primary:8081" },
+		{ id: "secondary", apiKey: SECONDARY_KEY, upstreamUrl: "http://secondary:8081" },
+	]);
+	assert.equal(configuration.webApiKey, PRIMARY_KEY);
+	assert(configuration.users.every((user) => !Object.hasOwn(user, "apiKeyEnv")), "resolved routes carry only concrete keys to the gateway factory");
+});
+
+test("key references read only the supplied environment and never fall back to process.env", () => {
+	assert.notEqual(process.env.PATH, PRIMARY_KEY);
+	const route = { id: "primary", apiKeyEnv: "PATH", upstreamUrl: "http://primary:8081" };
+	const env = { LH_SERVER_USERS: JSON.stringify([route]), LH_WEB_API_KEY: PRIMARY_KEY };
+	assert.deepEqual(readGatewayConfiguration({ ...env, PATH: PRIMARY_KEY }).users, [
+		{ id: "primary", apiKey: PRIMARY_KEY, upstreamUrl: "http://primary:8081" },
+	]);
+	assert.throws(() => readGatewayConfiguration(env), "an inherited process variable is not part of the supplied environment");
+	const inheritedEnvironment = Object.assign(Object.create({ PATH: PRIMARY_KEY }) as Record<string, string | undefined>, env);
+	assert.throws(() => readGatewayConfiguration(inheritedEnvironment), "inherited object properties do not supply key values");
+});
+
+test("key references reject ambiguous fields, invalid variable names and missing values without reflecting their contents", () => {
+	const referenceName = "CUSTOM_PRIVATE_SERVER_KEY";
+	const common = { id: "primary", upstreamUrl: "http://primary:8081" };
+	const invalidEntries: unknown[] = [
+		common,
+		{ ...common, apiKey: null },
+		{ ...common, apiKeyEnv: null },
+		{ ...common, apiKeyEnv: "" },
+		{ ...common, apiKeyEnv: 42 },
+		{ ...common, apiKeyEnv: [referenceName] },
+		{ ...common, apiKeyEnv: { value: referenceName } },
+		{ ...common, apiKeyEnv: "1INVALID" },
+		{ ...common, apiKeyEnv: "KEY-WITH-HYPHENS" },
+		{ ...common, apiKeyEnv: "PRIVATE name with spaces" },
+		{ ...common, apiKeyEnv: "KEY\n" },
+		{ ...common, apiKeyEnv: "${PRIVATE_KEY}" },
+		{ ...common, apiKey: PRIMARY_KEY, apiKeyEnv: referenceName },
+		{ ...common, apiKey: PRIMARY_KEY, apiKeyEnv: null },
+		{ ...common, apiKey: null, apiKeyEnv: referenceName },
+		{ ...common, apiKeyEnv: referenceName, extra: "unknown-field" },
+		{ ...common, apiKey: PRIMARY_KEY, extra: "unknown-field" },
+	];
+	const invalidEnvironments: Array<Record<string, string | undefined>> = invalidEntries.map((entry) => ({
+		LH_SERVER_USERS: JSON.stringify([entry]), LH_WEB_API_KEY: PRIMARY_KEY, [referenceName]: PRIMARY_KEY,
+	}));
+	for (const value of [undefined, "", " ", "contains whitespace", "private-value\n", 42 as unknown as string]) {
+		invalidEnvironments.push({
+			LH_SERVER_USERS: JSON.stringify([{ ...common, apiKeyEnv: referenceName }]),
+			LH_WEB_API_KEY: PRIMARY_KEY,
+			[referenceName]: value,
+		});
+	}
+	for (const env of invalidEnvironments) {
+		assert.throws(() => readGatewayConfiguration(env), (error: unknown) => {
+			assert.ok(error instanceof Error);
+			for (const privateText of [PRIMARY_KEY, referenceName, "PRIVATE name with spaces", "private-value", "unknown-field"]) {
+				assert(!error.message.includes(privateText), "configuration errors do not echo values or referenced variable names");
+			}
+			return true;
+		});
+	}
+});
+
+test("duplicate resolved keys cannot assign the same credential to separate users", () => {
+	for (const keyFields of [
+		[{ apiKey: PRIMARY_KEY }, { apiKeyEnv: "CUSTOM_SECONDARY_KEY" }],
+		[{ apiKeyEnv: "CUSTOM_PRIMARY_KEY" }, { apiKeyEnv: "CUSTOM_SECONDARY_KEY" }],
+	]) {
+		const entries = keyFields.map((fields, index) => ({ id: `user${index}`, upstreamUrl: `http://worker${index}:8081`, ...fields }));
+		assert.throws(() => readGatewayConfiguration({
+			LH_SERVER_USERS: JSON.stringify(entries), LH_WEB_API_KEY: PRIMARY_KEY,
+			CUSTOM_PRIMARY_KEY: PRIMARY_KEY, CUSTOM_SECONDARY_KEY: PRIMARY_KEY,
+		}), (error: unknown) => {
+			assert.ok(error instanceof Error);
+			assert(!error.message.includes(PRIMARY_KEY));
+			return true;
+		});
+	}
 });
 
 test("multiuser configuration rejects ambiguous users, keys, upstreams and web selections without exposing secrets", () => {
@@ -195,8 +291,8 @@ test("worker launcher keeps the application on loopback and refuses shared routi
 	assert.equal(readContainerConfiguration({ LH_SERVER_API_KEY: PRIMARY_KEY }).mode, "single", "existing deployments keep their default mode");
 });
 
-test("API users read and write only their backend even when session IDs match", async (t) => {
-	const { apiPort, applications } = await fixture(t);
+test("API keys resolved from custom environment variables isolate backends even when session IDs match", async (t) => {
+	const { apiPort, applications } = await fixture(t, PRIMARY_KEY, true);
 	for (const [key, title] of [[PRIMARY_KEY, "Primary history"], [SECONDARY_KEY, "Secondary history"]] as const) {
 		const body = JSON.stringify({ id: "same-session", title });
 		assert.equal((await send(apiPort, "/api/chats", { method: "POST", headers: { ...bearer(key), "Content-Type": "application/json" }, body })).status, 200);

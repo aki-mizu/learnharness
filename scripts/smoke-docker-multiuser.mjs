@@ -154,6 +154,7 @@ const user = ${JSON.stringify({ id: user.id, chatId: user.chat.id })};
 assert.notEqual(process.getuid(), 0);
 assert.equal(process.env.LH_SERVER_USERS, undefined, 'worker cannot see the routing map');
 assert.equal(process.env.LH_WEB_API_KEY, undefined, 'worker cannot see the web selection');
+assert.equal(process.env.LH_PRIMARY_API_KEY, undefined, 'worker receives only its own normalized key');
 assert.equal(process.env.LH_SECONDARY_API_KEY, undefined, 'worker receives only its own normalized key');
 assert.equal(fs.statSync('/state/auth.json').mode & 0o777, 0o600);
 const chatFile = '/state/data/chats/' + user.chatId + '.json';
@@ -181,7 +182,8 @@ fs.writeFileSync('/state/data/jobs/job_smoke_' + user.id + '.json', JSON.stringi
 	})).chats.map((chat) => chat.id), [users[0].chat.id], "client headers cannot change the YAML-selected web user");
 	probe("gateway", `
 import assert from 'node:assert/strict';
-const users = JSON.parse(process.env.LH_SERVER_USERS);
+import { readGatewayConfiguration } from './server-gateway.mjs';
+const { users } = readGatewayConfiguration();
 for (const user of users) {
   for (const route of ['/', '/api/chats', '/_next/static/test.js']) {
     const denied = await fetch(user.upstreamUrl + route, {signal: AbortSignal.timeout(5000)});

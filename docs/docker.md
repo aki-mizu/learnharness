@@ -172,21 +172,34 @@ settings, provider keys, and subscription connections in a separate volume.
 
 The supplied file configures two users:
 
-| User | API key variable | State volume | Initial data |
+| User | API key variable by default | State volume | Initial data |
 | --- | --- | --- | --- |
 | `primary` | `LH_SERVER_API_KEY` | `learnharness_state` | Existing single-user data when the stack/project name is preserved |
 | `secondary` | `LH_SECONDARY_API_KEY` | `secondary_state` | Empty workspace |
 
-Generate a distinct key for each user with `openssl rand -hex 32`. Use those
-hex values for this Compose example: the keys are interpolated into the JSON
-`LH_SERVER_USERS` setting, so quotes and backslashes would need JSON escaping.
-The keys grant access to LearnHarness; each user configures their own model
-provider keys and model slots separately.
+Generate a distinct key for each user with `openssl rand -hex 32`. By default,
+the two key anchors at the top of the file read the variables in the table.
+You can instead paste each key **once** directly into those two lines:
 
-In Portainer, paste `compose.multiuser.yaml` into the stack's Web editor and set
-both key variables. Keep your existing `HOST_PORT`, `API_PORT`, interface, image,
-and stack-name settings. This setup requires an image built with the multiple-user
-gateway and worker support; wait for that image to publish, or build locally.
+```yaml
+x-primary-api-key: &primary_api_key "PASTE_PRIMARY_KEY_HERE"
+x-secondary-api-key: &secondary_api_key "PASTE_SECONDARY_KEY_HERE"
+```
+
+Replace the placeholder values with your generated keys and keep the anchor
+names. The YAML aliases reuse each value for its worker, gateway routing, and
+website selection. No other key values need editing, and the two key variables
+are unnecessary when using inline values. The `apiKeyEnv` fields in
+`LH_SERVER_USERS` name gateway environment variables; the gateway resolves the
+keys from those aliases, so the secrets do not need JSON escaping. The keys
+grant access to LearnHarness; each user configures their own model provider
+keys and model slots separately.
+
+In Portainer, paste `compose.multiuser.yaml` into the stack's Web editor and
+either set both key variables or replace the two anchor values as shown above.
+Keep your existing `HOST_PORT`, `API_PORT`, interface, image, and stack-name
+settings. This version of the file requires an image with `apiKeyEnv` support;
+wait for that image to publish, or build locally.
 
 The unauthenticated website opens one configured user's workspace. Choose that
 user in the gateway's YAML environment:
@@ -196,11 +209,12 @@ LH_WEB_API_KEY: *primary_api_key
 ```
 
 Change the alias to `*secondary_api_key` and redeploy to show secondary instead.
-The selected key must appear in `LH_SERVER_USERS`; an unknown selection prevents
-gateway startup. No browser login or user picker is added. Everyone who can
-reach the website port can view and change the selected user's workspace, so
-keep that port on your LAN/VPN. Changing the website selection does not move or
-merge either user's data. Reload open browser tabs after changing it.
+The selected key must match a user resolved from `LH_SERVER_USERS`; an unknown
+selection prevents gateway startup. No browser login or user picker is added.
+Everyone who can reach the website port can view and change the selected user's
+workspace, so keep that port on your LAN/VPN. Changing the website selection
+does not move or merge either user's data. Reload open browser tabs after
+changing it.
 
 The public API continues to require `Authorization: Bearer <key>` on every
 request and stream, and accepts only `/api` and `/api/*`. A request using
@@ -217,7 +231,7 @@ the routing map and no application state volume. Keep these boundaries when
 customizing the stack: do not mount other users' state into a worker or publish
 its raw Next backend.
 
-To deploy from the command line:
+To deploy from the command line with the default environment-backed anchors:
 
 ```bash
 export LH_SERVER_API_KEY='<primary-random-hex-key>'
@@ -261,16 +275,19 @@ or a bind mount, preserve that choice when switching. Removing volumes with
 
 ### Add users and rotate keys
 
-To add another user, add a key anchor and variable, a worker service using
-`*worker` and `*worker_environment`, and a new state volume. Add its stable user
-ID, key, and worker URL to `LH_SERVER_USERS`, and add the worker to the gateway's
+To add another user, add a key anchor, a worker service using `*worker` and
+`*worker_environment`, and a new state volume. Pass the key alias to that
+worker's `LH_SERVER_API_KEY` and to a separate gateway environment variable.
+Add its stable user ID, that gateway variable's name as `apiKeyEnv`, and its
+worker URL to `LH_SERVER_USERS`, and add the worker to the gateway's
 `depends_on`. Every user must have a distinct key and a separate worker and
 volume. Redeploy after changing the configuration.
 
-To rotate a key, change that user's key variable and redeploy the gateway and
-worker, then update the user's clients. Preserve the user ID, service, and
-volume to retain its history. The YAML key aliases keep the selected website
-and worker credentials aligned when the variable changes. User IDs contain
+To rotate a key, change that user's inline anchor value or its default key
+variable and redeploy the gateway and worker, then update the user's clients.
+Preserve the user ID, service, and volume to retain its history. The YAML key
+aliases keep the selected website and worker credentials aligned when the
+value changes. User IDs contain
 1–64 letters, digits, underscores, or hyphens and start with a letter or digit.
 The gateway refuses duplicate keys, user IDs, or upstream origins. Removing a
 user from the routing map removes API access; retain their volume if the data

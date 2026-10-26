@@ -1,6 +1,8 @@
 # Use this file INSTEAD OF compose.yaml. Keep the same project/Portainer stack
 # name to reuse the existing learnharness_state volume for primary.
 # Generate distinct keys with: openssl rand -hex 32
+# To paste keys directly into this YAML, replace only the two quoted values
+# below with your keys. Keep the anchors; all other key references reuse them.
 x-primary-api-key: &primary_api_key "${LH_SERVER_API_KEY:?Set LH_SERVER_API_KEY to a random server API key}"
 x-secondary-api-key: &secondary_api_key "${LH_SECONDARY_API_KEY:?Set LH_SECONDARY_API_KEY to a different random server API key}"
 
@@ -55,19 +57,22 @@ services:
       NODE_ENV: production
       LH_WEB_PORT: *web_port
       LH_API_PORT: *api_port
+      LH_PRIMARY_API_KEY: *primary_api_key
+      LH_SECONDARY_API_KEY: *secondary_api_key
       # The unauthenticated website opens this user's workspace.
       # Change the alias to *secondary_api_key to select secondary.
       LH_WEB_API_KEY: *primary_api_key
       LH_SERVER_USERS: >-
-        [{"id":"primary","apiKey":"${LH_SERVER_API_KEY}","upstreamUrl":"http://primary:8081"},
-        {"id":"secondary","apiKey":"${LH_SECONDARY_API_KEY}","upstreamUrl":"http://secondary:8081"}]
+        [{"id":"primary","apiKeyEnv":"LH_PRIMARY_API_KEY","upstreamUrl":"http://primary:8081"},
+        {"id":"secondary","apiKeyEnv":"LH_SECONDARY_API_KEY","upstreamUrl":"http://secondary:8081"}]
     # The gateway receives no application state volume.
     healthcheck:
       test:
         - CMD
         - node
+        - --input-type=module
         - -e
-        - "Promise.all(JSON.parse(process.env.LH_SERVER_USERS).map(u=>fetch('http://127.0.0.1:'+process.env.LH_API_PORT+'/api/graph',{headers:{Authorization:'Bearer '+u.apiKey},signal:AbortSignal.timeout(5000)}))).then(rs=>process.exit(rs.every(r=>r.ok)?0:1)).catch(()=>process.exit(1))"
+        - "import { readGatewayConfiguration } from './server-gateway.mjs'; const { users } = readGatewayConfiguration(process.env); Promise.all(users.map(u=>fetch('http://127.0.0.1:'+process.env.LH_API_PORT+'/api/graph',{headers:{Authorization:'Bearer '+u.apiKey},signal:AbortSignal.timeout(5000)}))).then(rs=>process.exit(rs.every(r=>r.ok)?0:1)).catch(()=>process.exit(1))"
       interval: 30s
       timeout: 10s
       start_period: 30s

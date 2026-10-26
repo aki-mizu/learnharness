@@ -62,6 +62,28 @@ function userRoutes(users) {
 	});
 }
 
+/** Resolve key references at the environment boundary. Everything after this
+ * point uses concrete keys, including route validation and healthchecks.
+ */
+function resolveUserKeys(users, env) {
+	if (!Array.isArray(users) || users.length === 0) throw new Error("LH_SERVER_USERS must be a non-empty array of users.");
+	return users.map((user) => {
+		if (!user || typeof user !== "object" || Array.isArray(user)) {
+			throw new Error("LH_SERVER_USERS entries require a valid id, key source, and upstreamUrl.");
+		}
+		const hasKey = Object.hasOwn(user, "apiKey");
+		const hasReference = Object.hasOwn(user, "apiKeyEnv");
+		if (hasKey === hasReference) throw new Error("LH_SERVER_USERS entries require exactly one of apiKey or apiKeyEnv.");
+		if (!hasReference) return user;
+		const { apiKeyEnv, ...record } = user;
+		if (typeof apiKeyEnv !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
+			throw new Error("LH_SERVER_USERS apiKeyEnv must name an environment variable.");
+		}
+		const value = Object.hasOwn(env, apiKeyEnv) ? env[apiKeyEnv] : undefined;
+		return { ...record, apiKey: requiredKey(value, "LH_SERVER_USERS referenced API key") };
+	});
+}
+
 function selectedWebKey(users, value) {
 	const key = requiredKey(value, "LH_WEB_API_KEY");
 	if (!users.some((user) => user.apiKey === key)) throw new Error("LH_WEB_API_KEY must match a configured user API key.");
@@ -76,7 +98,7 @@ export function readGatewayConfiguration(env = process.env) {
 		}
 		let parsed;
 		try { parsed = JSON.parse(env.LH_SERVER_USERS); } catch { throw new Error("LH_SERVER_USERS must contain valid JSON."); }
-		const users = userRoutes(parsed);
+		const users = userRoutes(resolveUserKeys(parsed, env));
 		routing = { users, webApiKey: selectedWebKey(users, env.LH_WEB_API_KEY) };
 	} else {
 		if (env.LH_WEB_API_KEY !== undefined) throw new Error("LH_WEB_API_KEY requires LH_SERVER_USERS.");
