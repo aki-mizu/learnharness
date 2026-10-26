@@ -53,6 +53,7 @@ import {
 } from "../core/auth-keys.ts";
 import { authStore } from "../store/auth.ts";
 import { isSubscriptionProvider, subscriptionConnected } from "../agent/subscription-connections.ts";
+import { codexGatewayAuth } from "../agent/codex-gateway.ts";
 
 // The once-per-process boot record — globalThis anchor (HMR re-imports the
 // module; the snapshot must not re-run and misread fill-gapped vars as real
@@ -203,7 +204,9 @@ export function keyValue(id: string): string | undefined {
 export function providerKeyPresent(provider: string): boolean {
 	if (isSubscriptionProvider(provider)) return subscriptionConnected(provider);
 	const info = AUTH_PROVIDER_KEYS.find((p) => p.id === provider);
-	return info ? keyValue(info.envVar) !== undefined : true;
+	return info
+		? keyValue(info.envVar) !== undefined || (provider === "openai" && codexGatewayAuth() !== undefined)
+		: true;
 }
 
 /**

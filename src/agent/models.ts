@@ -17,6 +17,7 @@ import { chatGPTStream } from "./chatgpt-stream.ts";
 import type { ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 import { nativeSubscriptionId, nativeSubscriptionModel } from "./subscription-bridge.ts";
 import { nativeSubscriptionStream } from "./subscription-stream.ts";
+import { codexGatewayAuth } from "./codex-gateway.ts";
 
 /** App identity is immutable and shared by Models and every native Agent.
  * Agent's default Pi attribution otherwise overrides the Models identity. */
@@ -61,7 +62,22 @@ let collection: ReturnType<typeof createModels> | undefined;
 export function piModels() {
 	if (!collection) {
 		collection = createModels({ identity: APP_IDENTITY });
-		for (const provider of builtinProviders()) collection.setProvider(provider);
+		for (const provider of builtinProviders()) {
+			const keyAuth = provider.auth.apiKey;
+			if (provider.id === "openai" && keyAuth) {
+				provider.auth.apiKey = {
+					...keyAuth,
+					resolve: async (input) => {
+						const configured = await keyAuth.resolve(input);
+						if (configured) return configured;
+						input.signal.throwIfAborted();
+						const auth = codexGatewayAuth();
+						return auth ? { auth, source: "Codex gateway configuration" } : undefined;
+					},
+				};
+			}
+			collection.setProvider(provider);
+		}
 	}
 	return collection;
 }
