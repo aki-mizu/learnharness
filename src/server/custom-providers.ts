@@ -70,9 +70,10 @@ function positiveInteger(...values: unknown[]): number | undefined {
 	return values.find((v): v is number => typeof v === "number" && Number.isSafeInteger(v) && v > 0);
 }
 
-function discoveryModels(body: unknown): CustomProviderModel[] {
+function discoveryModels(body: unknown): { models: CustomProviderModel[]; needsVisionProbe: boolean } {
 	if (!isObject(body) || !Array.isArray(body.data)) throw new CustomProviderError(502, "Model discovery response must contain a data array");
 	const models = new Map<string, CustomProviderModel>();
+	let hasModalityMetadata = false;
 	for (const row of body.data) {
 		if (!isObject(row) || typeof row.id !== "string" || !row.id.trim() || row.id !== row.id.trim() || /[\x00-\x1f\x7f]/.test(row.id)) throw new CustomProviderError(502, "Model discovery returned an invalid model ID");
 		if (models.has(row.id)) continue;
@@ -81,6 +82,7 @@ function discoveryModels(body: unknown): CustomProviderModel[] {
 		const contextWindow = positiveInteger(row.contextWindow, row.context_length, top.context_length) ?? CUSTOM_MODEL_CONTEXT_WINDOW;
 		const maxTokens = Math.min(positiveInteger(row.maxTokens, row.max_output_tokens, top.max_completion_tokens) ?? CUSTOM_MODEL_MAX_TOKENS, contextWindow);
 		const modalities = row.input ?? row.input_modalities ?? architecture.input_modalities;
+		if (modalities !== undefined) hasModalityMetadata = true;
 		models.set(row.id, {
 			id: row.id,
 			name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : row.id,
@@ -90,7 +92,54 @@ function discoveryModels(body: unknown): CustomProviderModel[] {
 			reasoning: true,
 		});
 	}
-	return [...models.values()].sort((a, b) => a.id.localeCompare(b.id));
+	return {
+		models: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)),
+		needsVisionProbe: models.size === 1 && !hasModalityMetadata,
+	};
+}
+
+async function discoveryBody(response: Response): Promise<unknown> {
+	const reader = response.body?.getReader();
+	if (!reader) throw new CustomProviderError(502, "Model discovery returned an empty response");
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			size += value.byteLength;
+			if (size > MAX_DISCOVERY_BYTES) {
+				await reader.cancel();
+				throw new CustomProviderError(502, "Model discovery response is too large");
+			}
+			chunks.push(value);
+		}
+	} finally { reader.releaseLock(); }
+	try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new CustomProviderError(502, "Model discovery returned invalid JSON"); }
+}
+
+/** A server-wide capability is safe to apply only to a single-model catalog. */
+async function discoverVision(config: Omit<CustomProviderRecord, "models">, signal: AbortSignal): Promise<boolean> {
+	const url = new URL(config.baseUrl);
+	url.pathname = `${url.pathname.replace(/\/v1$/, "").replace(/\/$/, "")}/props`;
+	try {
+		const response = await fetch(url, {
+			headers: { Accept: "application/json", ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) },
+			signal,
+			redirect: "error",
+			cache: "no-store",
+		});
+		if (!response.ok) {
+			await response.body?.cancel();
+			return false;
+		}
+		const body = await discoveryBody(response);
+		signal.throwIfAborted();
+		return isObject(body) && isObject(body.modalities) && body.modalities.vision === true;
+	} catch {
+		// /props is optional: unsupported endpoints retain their discovered catalog.
+		return false;
+	}
 }
 
 async function discover(config: Omit<CustomProviderRecord, "models">, requestSignal?: AbortSignal): Promise<CustomProviderModel[]> {
@@ -107,26 +156,15 @@ async function discover(config: Omit<CustomProviderRecord, "models">, requestSig
 			await response.body?.cancel();
 			throw new CustomProviderError(502, `Model discovery failed (HTTP ${response.status})`);
 		}
-		const reader = response.body?.getReader();
-		if (!reader) throw new CustomProviderError(502, "Model discovery returned an empty response");
-		const chunks: Uint8Array[] = [];
-		let size = 0;
-		try {
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				size += value.byteLength;
-				if (size > MAX_DISCOVERY_BYTES) {
-					await reader.cancel();
-					throw new CustomProviderError(502, "Model discovery response is too large");
-				}
-				chunks.push(value);
-			}
-		} finally { reader.releaseLock(); }
-		let body: unknown;
-		try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new CustomProviderError(502, "Model discovery returned invalid JSON"); }
+		const body = await discoveryBody(response);
 		signal.throwIfAborted();
-		return discoveryModels(body);
+		const { models, needsVisionProbe } = discoveryModels(body);
+		if (needsVisionProbe && await discoverVision(config, signal)) {
+			models[0]!.input = ["text", "image"];
+		}
+		// Optional probe failures may be ignored; caller cancellation must not save.
+		requestSignal?.throwIfAborted();
+		return models;
 	} catch (error) {
 		if (error instanceof CustomProviderError) throw error;
 		// Do not expose upstream bodies, request URLs, or SDK errors containing credentials.
