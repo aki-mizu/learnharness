@@ -1,8 +1,9 @@
 # Docker and Portainer
 
-Run one LearnHarness backend with separate website and authenticated API ports.
-A stateless gateway uses the same image and forwards both ports to the single
-backend and state volume. The image uses Node 24
+Run LearnHarness in one container with separate website and authenticated API
+ports. Its startup script runs the backend on container loopback and a gateway
+that forwards both published ports to it. Both use the same container; only the
+backend owns the state volume. The image uses Node 24
 on Debian Bookworm, runs as the non-root `node` user (UID/GID 1000), and includes
 Chromium for generated demo verification. Native PDF/SVG renderers, prompts,
 and static assets are included in the standalone application payload.
@@ -102,7 +103,7 @@ For the existing website on port `3004`, keep `HOST_PORT=3004` and add
 `API_PORT=3005` plus `LH_SERVER_API_KEY`. The named data volume stays the same.
 
 Each port number appears once in Compose. YAML anchors reuse the gateway's
-container ports, and healthchecks read their process environment. The backend
+container ports, and the healthcheck reads its process environment. The backend
 uses the port already configured in the image. Change the published ports using
 `HOST_PORT` and `API_PORT`; container port targets can stay as supplied.
 
@@ -136,8 +137,8 @@ For public access, terminate HTTPS at a reverse proxy pointing to the **API
 port**. Tailscale clients can use the server's Tailscale address instead. For a
 reverse proxy in another container, configure a shared Docker network and its
 upstream appropriately; that container's `127.0.0.1` is not the LearnHarness
-container or Docker host. The Next.js backend itself has no published host port;
-both published listeners belong to the gateway.
+container or Docker host. The Next.js backend listens only on loopback inside
+the LearnHarness container; both published listeners belong to its gateway.
 
 Check API access from a shell with the key in an environment variable:
 
@@ -171,8 +172,9 @@ it with a bind mount or restore files, make that directory writable by UID/GID
 1000. Mount the directory, not just `auth.json`: key updates use atomic file
 replacement in the same directory.
 
-Run **one container/process per data volume**. Storage and running-turn
-registries are single-process; multiple replicas must not share the volume.
+Run **one LearnHarness container per data volume**. The container has one
+backend process; its gateway does not read or write application data. Storage
+and running-turn registries are single-process; multiple replicas must not share the volume.
 Back up the entire volume while the container is stopped for a consistent
 copy. Backups contain provider credentials as well as learning records.
 
@@ -185,11 +187,20 @@ Keep the Portainer stack name unchanged when updating so its volume is reused.
 After the branch's updated image is published, redeploy the Portainer stack
 and pull the image again. Preserve its named volume. Updates require a
 redeployment; running containers do not update automatically when a tag changes.
+
+When updating an older two-container stack, replace its Compose configuration
+with the current single-service file. Before deploying, stop and remove the old
+`<stack-name>-gateway-1` container in Portainer so it releases the website and
+API ports. Keep the stack name, existing port variables, API key, and named data
+volume. Do not remove the volume. The updated stack starts only
+`<stack-name>-learnharness-1`, which serves both ports.
+
 Without Portainer, use the same `BIND_IP` and `HOST_PORT` values as the first
-deployment:
+deployment. If migrating from the old two-service file, stop its `gateway`
+service before replacing the file, then run:
 
 ```bash
-HOST_PORT=3004 API_PORT=3005 docker compose up -d --force-recreate --wait
+HOST_PORT=3004 API_PORT=3005 docker compose up -d --remove-orphans --force-recreate --wait
 ```
 
 If you pinned a commit image, change `LEARNHARNESS_IMAGE` to the desired commit
@@ -197,10 +208,12 @@ tag before redeploying. For local builds, rebuild `learnharness:local` first and
 keep `LEARNHARNESS_IMAGE=learnharness:local` and
 `LEARNHARNESS_PULL_POLICY=never` set during recreation.
 
-The backend health check probes its internal `/api/graph`; the gateway health
-check probes its API listener with the configured server key. The complete
-container smoke test uses a
-separate project and temporary named volume; it checks the published port,
+The container healthcheck probes the gateway's API listener with the configured
+server key and reaches the backend's `/api/graph`, checking both components.
+The startup script waits for backend readiness before opening the published
+listeners and stops both components when the container stops or either fails.
+The complete container smoke test uses a separate project and temporary named
+volume; it checks the published port,
 non-root startup, both published ports, missing/wrong-key rejection, website
 route isolation on the API port, static assets, API writes, SSE, native PDF/SVG rendering,
 Chromium, and persistence after replacing the container:
