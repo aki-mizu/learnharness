@@ -41,6 +41,13 @@ jobs:
             --tag learnharness:local .
       - name: Verify startup, rendering, streaming and persistent storage
         run: node scripts/smoke-docker.mjs
+      - name: Validate multiuser Portainer Compose configuration
+        run: docker compose --file compose.multiuser.yaml config --quiet
+        env:
+          LH_SERVER_API_KEY: "docker-compose-validation-primary-key"
+          LH_SECONDARY_API_KEY: "docker-compose-validation-secondary-key"
+      - name: Verify isolated users, web selection and key rotation
+        run: node scripts/smoke-docker-multiuser.mjs
       # PRs only build/test. Publish the exact tested image from the Docker
       # branch; the existing v0.3.8 release tag is not moved or republished.
       - name: Publish the tested image to GHCR

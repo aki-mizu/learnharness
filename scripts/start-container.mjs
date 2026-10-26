@@ -1,8 +1,12 @@
-/** Run the private Next backend and both gateway listeners in one container. */
+/** Run a private Next backend with either legacy web/API listeners or one
+ * authenticated worker listener for a multiuser deployment.
+ */
 import { spawn } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { createServerGateway, readGatewayConfiguration } from "./server-gateway.mjs";
+import { pathToFileURL } from "node:url";
+import { createServerGateway, createWorkerGateway, readGatewayConfiguration } from "./server-gateway.mjs";
 
 const STARTUP_TIMEOUT_MS = 60_000;
 // Leave time for cleanup before Compose's 60-second stop grace period expires.
@@ -29,21 +33,35 @@ async function waitForBackend(upstreamUrl, signal) {
 	throw new Error("The LearnHarness backend did not become ready.");
 }
 
-async function main() {
-	const value = process.env.PORT ?? "3000";
+export function readContainerConfiguration(env = process.env) {
+	const mode = env.LH_CONTAINER_MODE ?? "single";
+	if (!["single", "worker"].includes(mode)) throw new Error("LH_CONTAINER_MODE must be single or worker.");
+	if (env.LH_SERVER_USERS !== undefined || env.LH_WEB_API_KEY !== undefined) {
+		throw new Error("User containers must receive only their own LH_SERVER_API_KEY; run shared routing with server-gateway.mjs.");
+	}
+	const value = env.PORT ?? "3000";
 	const backendPort = Number(value);
 	if (!/^\d+$/.test(value) || !Number.isInteger(backendPort) || backendPort < 1 || backendPort > 65535) {
 		throw new Error("PORT must be a valid backend port number.");
 	}
 	const configuration = readGatewayConfiguration({
-		...process.env,
+		...env,
 		LH_UPSTREAM_URL: `http://127.0.0.1:${backendPort}`,
 	});
-	if ([configuration.webPort, configuration.apiPort].includes(backendPort)) {
+	const listenerPorts = mode === "worker" ? [configuration.apiPort] : [configuration.webPort, configuration.apiPort];
+	if (listenerPorts.includes(backendPort)) {
 		throw new Error("The backend, website, and API must use different container ports.");
 	}
-	// Validate the key and both listener ports before spawning the backend.
-	const gateway = createServerGateway(configuration);
+	return { mode, backendPort, configuration };
+}
+
+async function main() {
+	const { mode, backendPort, configuration } = readContainerConfiguration();
+	// Validate all configuration before spawning a backend. Worker mode creates
+	// no unauthenticated listener, including on the container's web port.
+	const gateway = mode === "worker"
+		? createWorkerGateway({ apiKey: configuration.apiKey, upstreamUrl: configuration.upstreamUrl, port: configuration.apiPort, host: configuration.host })
+		: createServerGateway(configuration);
 	const startup = new AbortController();
 	let finishStartup;
 	const startupFinished = new Promise((resolve) => { finishStartup = resolve; });
@@ -54,6 +72,7 @@ async function main() {
 	const backendEnv = { ...process.env, HOSTNAME: "127.0.0.1", PORT: String(backendPort) };
 	// Only the gateway needs the public API credential.
 	delete backendEnv.LH_SERVER_API_KEY;
+	delete backendEnv.LH_CONTAINER_MODE;
 	const backend = spawn(process.execPath, [path.join(import.meta.dirname, "server.js")], {
 		cwd: import.meta.dirname,
 		env: backendEnv,
@@ -102,13 +121,15 @@ async function main() {
 	}
 
 	for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => { void stop(0, signal); });
-	for (const server of [gateway.webServer, gateway.apiServer]) {
+	for (const server of mode === "worker" ? [gateway.server] : [gateway.webServer, gateway.apiServer]) {
 		server.on("error", () => fail("A gateway listener failed."));
 	}
 	try {
 		await waitForBackend(configuration.upstreamUrl, startup.signal);
 		if (!stopping) await gateway.start();
-		if (!stopping) console.log(`[start-container] Ready: website ${configuration.webPort}; authenticated API ${configuration.apiPort}.`);
+		if (!stopping) console.log(mode === "worker"
+			? `[start-container] Ready: authenticated worker ${configuration.apiPort}.`
+			: `[start-container] Ready: website ${configuration.webPort}; authenticated API ${configuration.apiPort}.`);
 	} catch {
 		if (!stopping) fail("Startup failed; stopping the container.");
 	} finally {
@@ -117,7 +138,9 @@ async function main() {
 	if (shutdown) await shutdown;
 }
 
-main().catch(() => {
-	console.error("[start-container] Startup failed. Check the server API key and container port configuration.");
-	process.exitCode = 1;
-});
+if (process.argv[1] && existsSync(process.argv[1]) && pathToFileURL(realpathSync(path.resolve(process.argv[1]))).href === import.meta.url) {
+	main().catch(() => {
+		console.error("[start-container] Startup failed. Check the server API key, container mode, and port configuration.");
+		process.exitCode = 1;
+	});
+}

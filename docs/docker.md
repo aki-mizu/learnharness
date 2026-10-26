@@ -11,6 +11,10 @@ and static assets are included in the standalone application payload.
 This setup targets **Docker Standalone with Docker Compose v2**, including
 Portainer's Docker Standalone stacks. It does not configure Docker Swarm.
 
+For separate users with their own API keys, sessions, and history, use the
+[multiple-user deployment](#multiple-users-with-isolated-history) below. The
+original [`compose.yaml`](../compose.yaml) remains the single-user setup.
+
 ## Images on GitHub Container Registry
 
 The Docker workflow publishes these **Linux amd64** images after its build and
@@ -158,9 +162,129 @@ connections. With nginx, use `proxy_buffering off` and a suitable
 `proxy_read_timeout` for `/api/` traffic. HTTPS is also needed for browser
 microphone access when using dictation from a phone or another remote device.
 
+## Multiple users with isolated history
+
+Use [`compose.multiuser.yaml`](../compose.multiuser.yaml) **instead of**
+`compose.yaml`. It runs one shared gateway and one worker container per user.
+All API clients use the same API address; the bearer key selects the user's
+worker. Each worker has its own sessions, history, knowledge graph, jobs,
+settings, provider keys, and subscription connections in a separate volume.
+
+The supplied file configures two users:
+
+| User | API key variable | State volume | Initial data |
+| --- | --- | --- | --- |
+| `primary` | `LH_SERVER_API_KEY` | `learnharness_state` | Existing single-user data when the stack/project name is preserved |
+| `secondary` | `LH_SECONDARY_API_KEY` | `secondary_state` | Empty workspace |
+
+Generate a distinct key for each user with `openssl rand -hex 32`. Use those
+hex values for this Compose example: the keys are interpolated into the JSON
+`LH_SERVER_USERS` setting, so quotes and backslashes would need JSON escaping.
+The keys grant access to LearnHarness; each user configures their own model
+provider keys and model slots separately.
+
+In Portainer, paste `compose.multiuser.yaml` into the stack's Web editor and set
+both key variables. Keep your existing `HOST_PORT`, `API_PORT`, interface, image,
+and stack-name settings. This setup requires an image built with the multiple-user
+gateway and worker support; wait for that image to publish, or build locally.
+
+The unauthenticated website opens one configured user's workspace. Choose that
+user in the gateway's YAML environment:
+
+```yaml
+LH_WEB_API_KEY: *primary_api_key
+```
+
+Change the alias to `*secondary_api_key` and redeploy to show secondary instead.
+The selected key must appear in `LH_SERVER_USERS`; an unknown selection prevents
+gateway startup. No browser login or user picker is added. Everyone who can
+reach the website port can view and change the selected user's workspace, so
+keep that port on your LAN/VPN. Changing the website selection does not move or
+merge either user's data. Reload open browser tabs after changing it.
+
+The public API continues to require `Authorization: Bearer <key>` on every
+request and stream, and accepts only `/api` and `/api/*`. A request using
+primary's key cannot read secondary's chat by its ID: it reaches primary's
+worker, where that chat is absent. Each user also has a separate event stream
+and independent background work.
+
+Only the shared gateway publishes host ports. Each worker keeps Next on
+container loopback and exposes a private listener that requires its own key
+for **every** path, including pages and static assets. This also prevents one
+worker's web tools from reading another worker over the Docker network without
+its key. Workers receive only their own key and state volume; the gateway has
+the routing map and no application state volume. Keep these boundaries when
+customizing the stack: do not mount other users' state into a worker or publish
+its raw Next backend.
+
+To deploy from the command line:
+
+```bash
+export LH_SERVER_API_KEY='<primary-random-hex-key>'
+export LH_SECONDARY_API_KEY='<secondary-random-hex-key>'
+HOST_PORT=3004 API_PORT=3005 \
+  docker compose -f compose.multiuser.yaml up -d --wait
+```
+
+Local image overrides (`LEARNHARNESS_IMAGE` and `LEARNHARNESS_PULL_POLICY`)
+work the same way as the single-user file. Users connect Portal to the same
+API URL with their respective key. To configure secondary through the web UI,
+select its key in YAML, redeploy, and open Settings; API clients can also use
+the existing settings and provider endpoints with their own bearer key.
+
+### Keep existing data when switching
+
+The primary worker reuses the existing `learnharness_state` volume and its
+unchanged `/state/data` and `/state/auth.json` paths. Its existing sessions,
+provider keys, and subscription credentials stay together. Secondary gets a
+new volume with no copied history or credentials.
+
+Before switching an existing stack, stop its old `learnharness` service and
+back up its state volume. Replace the stack YAML while keeping the same stack
+name and `LH_SERVER_API_KEY`. Remove the stopped old container so it releases
+the published ports; keep the volume. Deploy the new gateway, primary, and
+secondary services. Never run the old backend and primary against the same
+volume concurrently.
+
+For a CLI deployment, run this while the old `compose.yaml` is still available,
+then start the replacement services with the same project name:
+
+```bash
+docker compose stop learnharness
+docker compose rm -f learnharness
+docker compose -f compose.multiuser.yaml up -d --wait
+```
+
+If the existing project uses `-p`, `COMPOSE_PROJECT_NAME`, a renamed volume,
+or a bind mount, preserve that choice when switching. Removing volumes with
+`down --volumes` would delete the saved data.
+
+### Add users and rotate keys
+
+To add another user, add a key anchor and variable, a worker service using
+`*worker` and `*worker_environment`, and a new state volume. Add its stable user
+ID, key, and worker URL to `LH_SERVER_USERS`, and add the worker to the gateway's
+`depends_on`. Every user must have a distinct key and a separate worker and
+volume. Redeploy after changing the configuration.
+
+To rotate a key, change that user's key variable and redeploy the gateway and
+worker, then update the user's clients. Preserve the user ID, service, and
+volume to retain its history. The YAML key aliases keep the selected website
+and worker credentials aligned when the variable changes. User IDs contain
+1–64 letters, digits, underscores, or hyphens and start with a letter or digit.
+The gateway refuses duplicate keys, user IDs, or upstream origins. Removing a
+user from the routing map removes API access; retain their volume if the data
+should be kept.
+
+The gateway healthcheck probes every configured user's API route. Each worker
+also checks its own authenticated listener and backend. A worker failure
+affects that user's requests and health status; the other workers keep their
+own state and processes.
+
 ## Persistent data
 
-The stack mounts one named volume at `/state`:
+The single-user stack mounts one named volume at `/state`. The multiple-user
+stack mounts a separate volume at `/state` in each worker. Each contains:
 
 | Path | Contents |
 | --- | --- |
@@ -172,7 +296,7 @@ The stack mounts one named volume at `/state`:
 
 Subscription credential files are created beside the configured `LH_AUTH_FILE`,
 so the supplied stack preserves them in the same `/state` volume. Browsers using
-this server share its saved connections and background-use consent.
+the same user's workspace share its saved connections and background-use consent.
 
 The named volume is initialized with ownership for UID/GID 1000. If you replace
 it with a bind mount or restore files, make that directory writable by UID/GID
@@ -195,16 +319,23 @@ After the branch's updated image is published, redeploy the Portainer stack
 and pull the image again. Preserve its named volume. Updates require a
 redeployment; running containers do not update automatically when a tag changes.
 
-When updating an older two-container stack, replace its Compose configuration
-with the current single-service file. Before deploying, stop and remove the old
+For a multiple-user stack, keep `compose.multiuser.yaml`, its gateway and worker
+services, key settings, and all user volumes. Update every service to the same
+image version and redeploy. From the CLI, keep the existing project name and
+run `docker compose -f compose.multiuser.yaml up -d --force-recreate --wait`.
+
+The older-stack migration instructions below apply to the **single-user**
+deployment. When updating an older two-container single-user stack, replace
+its Compose configuration with the current single-service `compose.yaml`.
+Before deploying, stop and remove the old
 `<stack-name>-gateway-1` container in Portainer so it releases the website and
 API ports. Keep the stack name, existing port variables, API key, and named data
 volume. Do not remove the volume. The updated stack starts only
 `<stack-name>-learnharness-1`, which serves both ports.
 
 Without Portainer, use the same `BIND_IP` and `HOST_PORT` values as the first
-deployment. If migrating from the old two-service file, stop its `gateway`
-service before replacing the file, then run:
+deployment. If migrating the single-user stack from the old two-service file,
+stop its `gateway` service before replacing the file, then run:
 
 ```bash
 HOST_PORT=3004 API_PORT=3005 docker compose up -d --remove-orphans --force-recreate --wait
@@ -234,6 +365,24 @@ The smoke test uses a dummy key, makes no model/provider requests, and removes
 only its own temporary containers and volume. It explicitly uses the local
 image and never pulls from GHCR. The Docker GitHub Actions workflow runs this
 test before tagging and pushing that same image to GHCR on the Docker branch.
+
+The multiple-user smoke test runs after that image check in CI. To run both
+locally after building the image:
+
+```bash
+node scripts/smoke-docker.mjs
+node scripts/smoke-docker-multiuser.mjs
+```
+
+The additional test uses a separate temporary project with dummy keys. It
+first verifies that switching from the single-user stack preserves primary's
+existing session and leaves secondary empty. It checks separate histories, graphs, jobs, settings,
+and provider keys; authenticated worker ingress with no raw Next or
+unauthenticated worker web port; each user's SSE events; persistence after
+recreating containers; switching the website's selected user through YAML; and
+rotating secondary's key while preserving its volume. It makes no model or
+provider requests and removes only its own temporary containers and volumes.
+Native renderer and Chromium checks remain in the original image smoke test.
 
 ## Differences from the desktop app
 

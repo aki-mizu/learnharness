@@ -70,6 +70,7 @@ npm test           # deterministic, no LLM, no network
 See the [development guide](docs/development.md), [architecture](docs/architecture.md), and [desktop release guide](docs/desktop-release.md).
 
 To host the website and a separate API port requiring an access key, see the [Docker and Portainer guide](docs/docker.md).
+For multiple API keys with separate users and history, see [multiple-user deployment](docs/docker.md#multiple-users-with-isolated-history).
 
 API clients can add custom OpenAI-compatible endpoints using the [custom provider API](docs/custom-providers-api.md).
 

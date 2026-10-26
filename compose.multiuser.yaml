@@ -1,0 +1,95 @@
+# Use this file INSTEAD OF compose.yaml. Keep the same project/Portainer stack
+# name to reuse the existing learnharness_state volume for primary.
+# Generate distinct keys with: openssl rand -hex 32
+x-primary-api-key: &primary_api_key "${LH_SERVER_API_KEY:?Set LH_SERVER_API_KEY to a random server API key}"
+x-secondary-api-key: &secondary_api_key "${LH_SECONDARY_API_KEY:?Set LH_SECONDARY_API_KEY to a different random server API key}"
+
+x-worker: &worker
+  image: "${LEARNHARNESS_IMAGE:-ghcr.io/aki-mizu/learnharness:docker-0.3.8}"
+  pull_policy: "${LEARNHARNESS_PULL_POLICY:-always}"
+  restart: unless-stopped
+  init: true
+  environment: &worker_environment
+    NODE_ENV: production
+    NEXT_TELEMETRY_DISABLED: "1"
+    LH_CONTAINER_MODE: worker
+    LH_DATA_DIR: /state/data
+    LH_AUTH_FILE: /state/auth.json
+    CHROME_PATH: /usr/bin/chromium
+    LH_API_PORT: &worker_api_port 8081
+  # No host ports: this listener requires the user's key for EVERY path.
+  expose:
+    - *worker_api_port
+  healthcheck:
+    test:
+      - CMD
+      - node
+      - -e
+      - "fetch('http://127.0.0.1:'+process.env.LH_API_PORT+'/api/graph',{headers:{Authorization:'Bearer '+process.env.LH_SERVER_API_KEY},signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+    interval: 30s
+    timeout: 10s
+    start_period: 30s
+    retries: 3
+  stop_grace_period: 60s
+
+services:
+  gateway:
+    image: "${LEARNHARNESS_IMAGE:-ghcr.io/aki-mizu/learnharness:docker-0.3.8}"
+    pull_policy: "${LEARNHARNESS_PULL_POLICY:-always}"
+    command: ["node", "server-gateway.mjs"]
+    restart: unless-stopped
+    init: true
+    depends_on:
+      primary:
+        condition: service_healthy
+      secondary:
+        condition: service_healthy
+    ports:
+      - target: &web_port 8080
+        published: "${HOST_PORT:-3000}"
+        host_ip: "${BIND_IP:-0.0.0.0}"
+      - target: &api_port 8081
+        published: "${API_PORT:-3005}"
+        host_ip: "${API_BIND_IP:-0.0.0.0}"
+    environment:
+      NODE_ENV: production
+      LH_WEB_PORT: *web_port
+      LH_API_PORT: *api_port
+      # The unauthenticated website opens this user's workspace.
+      # Change the alias to *secondary_api_key to select secondary.
+      LH_WEB_API_KEY: *primary_api_key
+      LH_SERVER_USERS: >-
+        [{"id":"primary","apiKey":"${LH_SERVER_API_KEY}","upstreamUrl":"http://primary:8081"},
+        {"id":"secondary","apiKey":"${LH_SECONDARY_API_KEY}","upstreamUrl":"http://secondary:8081"}]
+    # The gateway receives no application state volume.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "Promise.all(JSON.parse(process.env.LH_SERVER_USERS).map(u=>fetch('http://127.0.0.1:'+process.env.LH_API_PORT+'/api/graph',{headers:{Authorization:'Bearer '+u.apiKey},signal:AbortSignal.timeout(5000)}))).then(rs=>process.exit(rs.every(r=>r.ok)?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    stop_grace_period: 60s
+
+  primary:
+    <<: *worker
+    environment:
+      <<: *worker_environment
+      LH_SERVER_API_KEY: *primary_api_key
+    volumes:
+      - learnharness_state:/state
+
+  secondary:
+    <<: *worker
+    environment:
+      <<: *worker_environment
+      LH_SERVER_API_KEY: *secondary_api_key
+    volumes:
+      - secondary_state:/state
+
+volumes:
+  learnharness_state:
+  secondary_state:
