@@ -37,6 +37,8 @@ function connectionProviderIds(): string[] { return [...piModels().getProviders(
 import { settingsStore } from "../store/settings.ts";
 import { effectiveSettings } from "./stores.ts";
 import { keyValue } from "./keys.ts";
+import { listCustomProviders } from "./custom-providers.ts";
+import { isCustomProviderId } from "../core/custom-providers.ts";
 import type { ChatSettings } from "../core/contracts/chat.ts";
 import type {
 	CatalogDefaults,
@@ -142,6 +144,7 @@ export function catalogProviders(): CatalogProvider[] {
 	})).concat([
 		{ id: "chatgpt", envVar: "", keyPresent: chatGPTConnected() },
 		...NATIVE_SUBSCRIPTIONS.map((p) => ({ id: p.logicalId, envVar: "", keyPresent: nativeSubscriptionConnected(p.providerId) })),
+		...listCustomProviders().map((p) => ({ id: p.id, envVar: "", keyPresent: true })),
 	]).sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -169,6 +172,7 @@ export function toModelDto(model: Model<Api>): ModelDto {
 		},
 		contextWindow: model.contextWindow,
 		maxTokens: model.maxTokens,
+		...(isCustomProviderId(model.provider) ? { pricingKnown: false } : {}),
 	};
 }
 

@@ -71,6 +71,8 @@ See the [development guide](docs/development.md), [architecture](docs/architectu
 
 To host the web UI and API on your own server, see the [Docker and Portainer guide](docs/docker.md).
 
+API clients can add custom OpenAI-compatible endpoints using the [custom provider API](docs/custom-providers-api.md).
+
 Questions, bug reports, and feature requests: [GitHub Issues](https://github.com/amosblomqvist/learnharness/issues).
 
 ## License
