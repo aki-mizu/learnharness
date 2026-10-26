@@ -152,22 +152,89 @@ describe("custom provider API", () => {
 		assert.equal(provider.models.find((m) => m.id === "small")!.maxTokens, 2048);
 	});
 
+	it("uses per-model serving context while preserving standard metadata precedence and ignoring training limits", async () => {
+		discovery = async () => Response.json({ data: [
+			{ id: "runtime", meta: { n_ctx: 102400, n_ctx_train: 262144 }, max_output_tokens: 65536 },
+			{ id: "camel", contextWindow: 65536, context_length: 81920, top_provider: { context_length: 98304 }, meta: { n_ctx: 102400 } },
+			{ id: "snake", context_length: 81920, top_provider: { context_length: 98304 }, meta: { n_ctx: 102400 } },
+			{ id: "top", top_provider: { context_length: 98304 }, meta: { n_ctx: 102400 } },
+			{ id: "training-only", meta: { n_ctx_train: 262144 } },
+		] });
+		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 2048 }, modalities: { vision: true } });
+		const provider = await create();
+		assert.deepEqual(Object.fromEntries(provider.models.map((model) => [model.id, model.contextWindow])), {
+			camel: 65536, runtime: 102400, snake: 81920, top: 98304, "training-only": 32768,
+		});
+		assert.equal(provider.models.find((model) => model.id === "runtime")!.maxTokens, 65536);
+		assert.equal(propsRequests.length, 0, "server-wide props must not be applied to a multi-model catalog");
+	});
+
+	it("discovers context despite explicit modalities and caps output against the resolved context", async () => {
+		discovery = async () => Response.json({ data: [{ id: "fixture-chat", input: ["text"], max_output_tokens: 65536 }] });
+		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 102400 }, modalities: { vision: true } });
+		const provider = await create();
+		assert.equal(provider.models[0]!.contextWindow, 102400);
+		assert.equal(provider.models[0]!.maxTokens, 65536, "do not clamp an explicit output limit to a temporary context fallback");
+		assert.deepEqual(provider.models[0]!.input, ["text"], "a context probe must not override explicit modalities");
+		assert.equal(propsRequests.length, 1);
+		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 2048 } });
+		const refreshed = await refreshRoute.POST(request("POST"), params(provider.id));
+		assert.equal(refreshed.status, 200);
+		assert.equal((await read(provider.id)).models[0]!.contextWindow, 2048);
+		assert.equal((await read(provider.id)).models[0]!.maxTokens, 2048);
+	});
+
+	it("keeps valid model context while probing missing vision metadata", async () => {
+		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 102400 }, modalities: { vision: true } });
+		for (const metadata of [
+			{ contextWindow: 65536 },
+			{ context_length: 65536 },
+			{ top_provider: { context_length: 65536 } },
+			{ meta: { n_ctx: 65536 } },
+		]) {
+			discovery = async () => Response.json({ data: [{ id: "fixture-chat", ...metadata }] });
+			const provider = await create();
+			assert.equal(provider.models[0]!.contextWindow, 65536);
+			assert.deepEqual(provider.models[0]!.input, ["text", "image"]);
+		}
+		assert.equal(propsRequests.length, 4);
+	});
+
+	it("rejects invalid runtime context values without substituting the training maximum", async () => {
+		for (const value of [undefined, null, 0, -1, 1.5, "102400", true, Number.MAX_SAFE_INTEGER + 1]) {
+			discovery = async () => Response.json({ data: [{ id: "fixture-chat", input: ["text"], meta: { n_ctx: value, n_ctx_train: 262144 } }] });
+			propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: value } });
+			const provider = await create();
+			assert.equal(provider.models[0]!.contextWindow, 32768);
+			assert.equal(provider.models[0]!.maxTokens, 4096);
+		}
+		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 102400 } });
+		const provider = await create();
+		assert.equal(provider.models[0]!.contextWindow, 102400, "invalid model metadata still permits a valid props fallback");
+	});
+
 	it("discovers loaded vision from props and forwards tool-result images through the SDK", async () => {
-		propsDiscovery = async () => Response.json({ modalities: { vision: true } });
+		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 102400 }, modalities: { vision: true } });
 		const provider = await create({ baseUrl: "https://fixture.invalid/api/v1", apiKey: "fixture-vision-key" });
 		assert.deepEqual(provider.models[0]!.input, ["text", "image"]);
+		assert.equal(provider.models[0]!.contextWindow, 102400);
 		assert.equal(propsRequests.length, 1);
 		assert.equal(propsRequests[0]!.url, "https://fixture.invalid/api/props");
 		assert.equal(propsRequests[0]!.headers.get("authorization"), "Bearer fixture-vision-key");
 		assert.equal(propsRequests[0]!.redirect, "error");
 		assert.equal(propsRequests[0]!.cache, "no-store");
 		assert.deepEqual(JSON.parse(fs.readFileSync(CUSTOM_PROVIDERS_FILE, "utf8")).providers[0].models[0].input, ["text", "image"]);
+		assert.equal(JSON.parse(fs.readFileSync(CUSTOM_PROVIDERS_FILE, "utf8")).providers[0].models[0].contextWindow, 102400);
 		assert.deepEqual((await read(provider.id)).models[0]!.input, ["text", "image"]);
+		assert.equal((await read(provider.id)).models[0]!.contextWindow, 102400);
 		assert.equal(propsRequests.length, 1, "reading saved models must not probe the endpoint");
 		const catalogEntry = modelCatalog().models.find((model) => model.provider === provider.id)!;
 		assert.deepEqual(catalogEntry.input, ["text", "image"]);
+		assert.equal(catalogEntry.contextWindow, 102400);
 		const engine = piEngineForSpec({ provider: provider.id, id: "fixture-chat" });
 		assert.deepEqual(engine.model.input, ["text", "image"]);
+		assert.equal(engine.model.contextWindow, 102400);
+		assert.equal(catalogContextLimits().get(`${provider.id}:fixture-chat`), 102400);
 		const call = await engine.streamFn(engine.model, context, { fetch: async () => sse(true) }).result();
 		const toolCall = call.content.find((part) => part.type === "toolCall");
 		assert.ok(toolCall && toolCall.type === "toolCall");
@@ -190,10 +257,11 @@ describe("custom provider API", () => {
 	it("does not replace explicit modalities or apply server-wide props to multiple models", async () => {
 		propsDiscovery = async () => Response.json({ modalities: { vision: true } });
 		for (const data of [
-			[{ id: "fixture-chat", input: ["text"] }],
-			[{ id: "fixture-chat", input: ["text", "image"] }],
-			[{ id: "fixture-chat", input_modalities: ["text"] }],
-			[{ id: "fixture-chat", architecture: { input_modalities: ["text", "image"] } }],
+			[{ id: "fixture-chat", contextWindow: 32768, input: ["text"] }],
+			[{ id: "fixture-chat", contextWindow: 32768, input: ["text", "image"] }],
+			[{ id: "fixture-chat", contextWindow: 32768, input_modalities: ["text"] }],
+			[{ id: "fixture-chat", contextWindow: 32768, architecture: { input_modalities: ["text", "image"] } }],
+			[{ id: "fixture-chat", meta: { n_ctx: 102400, n_ctx_train: 262144 }, input: ["text"] }],
 			[{ id: "first" }, { id: "second" }],
 		]) {
 			discovery = async () => Response.json({ data });
@@ -216,23 +284,30 @@ describe("custom provider API", () => {
 			propsDiscovery = failure;
 			const provider = await create();
 			assert.deepEqual(provider.models[0]!.input, ["text"]);
+			assert.equal(provider.models[0]!.contextWindow, 32768);
 		}
 		assert.equal(propsRequests.length, failures.length);
 		assert.ok(propsRequests.every((request) => request.headers.get("authorization") === null));
 		assert.equal(propsRequests[0]!.url, "https://fixture.invalid/props");
 	});
 
-	it("refreshes loaded vision capability without automatic probes on saved-catalog reads", async () => {
-		propsDiscovery = async () => Response.json({ modalities: { vision: true } });
+	it("refreshes loaded context and vision without automatic probes on saved-catalog reads", async () => {
+		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 102400 }, modalities: { vision: true } });
 		const provider = await create({ baseUrl: "https://fixture.invalid/prefix" });
 		assert.equal(propsRequests[0]!.url, "https://fixture.invalid/prefix/props");
 		assert.deepEqual(provider.models[0]!.input, ["text", "image"]);
-		propsDiscovery = async () => Response.json({ modalities: { vision: false } });
+		assert.equal(piModels().getModel(provider.id, "fixture-chat")!.contextWindow, 102400);
+		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 131072 }, modalities: { vision: false } });
 		const response = await refreshRoute.POST(request("POST"), params(provider.id));
 		assert.equal(response.status, 200);
 		assert.deepEqual((await read(provider.id)).models[0]!.input, ["text"]);
+		assert.equal((await read(provider.id)).models[0]!.contextWindow, 131072);
+		assert.equal(JSON.parse(fs.readFileSync(CUSTOM_PROVIDERS_FILE, "utf8")).providers[0].models[0].contextWindow, 131072);
 		assert.deepEqual(piModels().getModel(provider.id, "fixture-chat")!.input, ["text"]);
+		assert.equal(piModels().getModel(provider.id, "fixture-chat")!.contextWindow, 131072);
 		assert.deepEqual(modelCatalog().models.find((model) => model.provider === provider.id)!.input, ["text"]);
+		assert.equal(modelCatalog().models.find((model) => model.provider === provider.id)!.contextWindow, 131072);
+		assert.equal(catalogContextLimits().get(`${provider.id}:fixture-chat`), 131072);
 		assert.equal(propsRequests.length, 2);
 	});
 
@@ -248,6 +323,7 @@ describe("custom provider API", () => {
 			};
 			const provider = await create();
 			assert.deepEqual(provider.models[0]!.input, ["text"]);
+			assert.equal(provider.models[0]!.contextWindow, 32768);
 		} finally { AbortSignal.timeout = originalTimeout; }
 	});
 
