@@ -210,11 +210,16 @@ for (const user of users) {
 	const eventPumps = [];
 	try {
 		for (let index = 0; index < users.length; index++) {
-			const response = await fetch(`${apiOrigin}/api/events`, {
-				headers: { Authorization: `Bearer ${users[index].key}` }, signal: AbortSignal.any([eventControllers[index].signal, AbortSignal.timeout(20_000)]),
-			});
-			assert.equal(response.status, 200);
-			assert.match(response.headers.get("content-type"), /text\/event-stream/);
+			let response;
+			try {
+				response = await fetch(`${apiOrigin}/api/events`, {
+					headers: { Authorization: `Bearer ${users[index].key}` }, signal: AbortSignal.any([eventControllers[index].signal, AbortSignal.timeout(20_000)]),
+				});
+			} catch (error) {
+				throw new Error(`Could not attach ${users[index].id} event stream before response headers: ${error.message}`, { cause: error });
+			}
+			assert.equal(response.status, 200, `${users[index].id}: event stream response status`);
+			assert.match(response.headers.get("content-type"), /text\/event-stream/, `${users[index].id}: event stream content type`);
 			const reader = response.body.getReader();
 			eventReaders.push(reader);
 			eventPumps.push((async () => {
@@ -231,9 +236,9 @@ for (const user of users) {
 			})).arrayBuffer();
 			const deadline = Date.now() + 5000;
 			while (eventText[index].split("event: chats-changed").length === ownBefore && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
-			assert.equal(eventText[index].split("event: chats-changed").length, ownBefore + 1, "own event arrives through both proxies");
+			assert.equal(eventText[index].split("event: chats-changed").length, ownBefore + 1, `${users[index].id}: own chats-changed event arrives through both proxies`);
 			await new Promise((resolve) => setTimeout(resolve, 150));
-			assert.equal(eventText[other].split("event: chats-changed").length, otherBefore, "sibling stream does not receive another user's event");
+			assert.equal(eventText[other].split("event: chats-changed").length, otherBefore, `${users[other].id}: sibling stream does not receive another user's event`);
 		}
 		await renameAndObserve(0);
 		await renameAndObserve(1);
