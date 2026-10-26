@@ -11,7 +11,6 @@ services:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
       HOSTNAME: "0.0.0.0"
-      PORT: "3000"
       LH_DATA_DIR: /state/data
       LH_AUTH_FILE: /state/auth.json
       CHROME_PATH: /usr/bin/chromium
@@ -24,7 +23,7 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3000/api/graph',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "fetch('http://127.0.0.1:'+process.env.PORT+'/api/graph',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 30s
       timeout: 10s
       start_period: 30s
@@ -44,13 +43,16 @@ services:
 
     ports:
       # Keep the website's existing interface and port settings.
-      - "${BIND_IP:-0.0.0.0}:${HOST_PORT:-3000}:8080"
-      - "${API_BIND_IP:-0.0.0.0}:${API_PORT:-3005}:8081"
+      - target: &web_port 8080
+        published: "${HOST_PORT:-3000}"
+        host_ip: "${BIND_IP:-0.0.0.0}"
+      - target: &api_port 8081
+        published: "${API_PORT:-3005}"
+        host_ip: "${API_BIND_IP:-0.0.0.0}"
 
     environment:
-      LH_UPSTREAM_URL: http://learnharness:3000
-      LH_WEB_PORT: "8080"
-      LH_API_PORT: "8081"
+      LH_WEB_PORT: *web_port
+      LH_API_PORT: *api_port
       LH_SERVER_API_KEY: "${LH_SERVER_API_KEY:?Set LH_SERVER_API_KEY to a random server API key}"
 
     healthcheck:
@@ -58,7 +60,7 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:8081/api/graph',{headers:{Authorization:'Bearer '+process.env.LH_SERVER_API_KEY},signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "fetch('http://127.0.0.1:'+process.env.LH_API_PORT+'/api/graph',{headers:{Authorization:'Bearer '+process.env.LH_SERVER_API_KEY},signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 30s
       timeout: 10s
       start_period: 30s

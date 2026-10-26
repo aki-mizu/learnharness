@@ -101,6 +101,11 @@ Provider API keys are not needed for building or smoke checks.
 For the existing website on port `3004`, keep `HOST_PORT=3004` and add
 `API_PORT=3005` plus `LH_SERVER_API_KEY`. The named data volume stays the same.
 
+Each port number appears once in Compose. YAML anchors reuse the gateway's
+container ports, and healthchecks read their process environment. The backend
+uses the port already configured in the image. Change the published ports using
+`HOST_PORT` and `API_PORT`; container port targets can stay as supplied.
+
 The same Compose file can be used without Portainer:
 
 ```bash
