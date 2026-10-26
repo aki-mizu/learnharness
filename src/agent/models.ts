@@ -17,6 +17,7 @@ import { chatGPTStream } from "./chatgpt-stream.ts";
 import type { ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 import { nativeSubscriptionId, nativeSubscriptionModel } from "./subscription-bridge.ts";
 import { nativeSubscriptionStream } from "./subscription-stream.ts";
+import { syncCustomProviders } from "./custom-providers.ts";
 
 /** App identity is immutable and shared by Models and every native Agent.
  * Agent's default Pi attribution otherwise overrides the Models identity. */
@@ -34,8 +35,8 @@ export const APP_IDENTITY = Object.freeze({
  *
  * An "engine" is the model + the stream function the agent loop runs on —
  * the two things a test fake replaces. Production engines resolve the model
- * from pi-ai's static catalogs and stream through the same Models
- * collection.
+ * from pi-ai's catalogs or the injected custom-connection catalog and
+ * stream through the same Models collection.
  */
 
 export interface PiEngine {
@@ -50,8 +51,8 @@ export type { ThinkingLevel };
 
 let collection: ReturnType<typeof createModels> | undefined;
 
-/** The process-wide pi-ai Models collection — EVERY builtin provider's
- *  catalog (model slots wave, 2026-09-20): engines and the picker resolve
+/** The process-wide pi-ai Models collection — every builtin provider plus
+ *  API-managed custom connections: engines and the picker resolve
  *  against all of pi-ai's per-provider catalogs, so a settings slot can pin
  *  any native model id. Auth is resolved per request by pi-ai itself from
  *  the environment (the keys seam reflects file-saved keys into env), and
@@ -63,6 +64,7 @@ export function piModels() {
 		collection = createModels({ identity: APP_IDENTITY });
 		for (const provider of builtinProviders()) collection.setProvider(provider);
 	}
+	syncCustomProviders(collection);
 	return collection;
 }
 

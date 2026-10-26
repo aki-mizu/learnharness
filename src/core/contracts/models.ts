@@ -22,6 +22,9 @@ export interface ModelCatalogEntry {
 	 * picker lists exactly these; anything else is a lie. */
 	supportedLevels: ThinkingLevel[];
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+	/** Custom endpoints do not advertise reliable rates. When false, cost
+	 * contains adapter placeholders; clients must treat pricing as unknown. */
+	pricingKnown?: boolean;
 	contextWindow: number;
 	maxTokens: number;
 }
