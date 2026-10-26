@@ -569,28 +569,28 @@ export class SessionModel {
 		this.consumeAbort = controller;
 		this.setError(null);
 		this.setStatus("submitted");
-		// The optimistic appends — exactly the messages the server's
-		// write-ahead will persist (inputAppends), with LOCAL ids so
-		// adoption can tell them from the record's absorbed copies.
-		const optimistic: LhMessage[] = [];
-		if (input.type === "text") optimistic.push({ ...newUserMessage(input.text), id: localId() });
-		else if (input.type === "thinking") {
-			// The practice submissions (2026-10-04): the marker lands
-			// optimistically — the card renders from its details the
-			// moment the button fires.
-			optimistic.push({ ...newThinkingMessage(input.problemCallId, input.text), id: localId() });
-		} else if (input.type === "next") {
-			// The move-on signal (owner round 16): the NEXT PROBLEM line
-			// renders the instant the chip/Enter fires.
-			optimistic.push({ ...newNextMessage(), id: localId() });
-		} else if (input.type === "answer") {
-			const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
-			optimistic.push({ ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() });
-		}
-		if (optimistic.length > 0) this.mutate(() => {
-			this.tail = [...this.tail, ...optimistic];
-		});
 		try {
+			// The optimistic appends — exactly the messages the server's
+			// write-ahead will persist (inputAppends), with LOCAL ids so
+			// adoption can tell them from the record's absorbed copies.
+			const optimistic: LhMessage[] = [];
+			if (input.type === "text") optimistic.push({ ...newUserMessage(input.text), id: localId() });
+			else if (input.type === "thinking") {
+				// The practice submissions (2026-10-04): the marker lands
+				// optimistically — the card renders from its details the
+				// moment the button fires.
+				optimistic.push({ ...newThinkingMessage(input.problemCallId, input.text), id: localId() });
+			} else if (input.type === "next") {
+				// The move-on signal (owner round 16): the NEXT PROBLEM line
+				// renders the instant the chip/Enter fires.
+				optimistic.push({ ...newNextMessage(), id: localId() });
+			} else if (input.type === "answer") {
+				const tool = pendingCallTool([...this.base, ...this.tail], input.toolCallId) ?? "quiz";
+				optimistic.push({ ...newAnswerResult(input.toolCallId, tool, input.answer), id: localId() });
+			}
+			if (optimistic.length > 0) this.mutate(() => {
+				this.tail = [...this.tail, ...optimistic];
+			});
 			// SUBMITS ARE NOT ABORTABLE BY VIEW TEARDOWN (owner, 2026-10-10 —
 			// the dead-session-start postmortem): the POST must NOT ride
 			// consumeAbort. Diet A's abort-on-unmount (session.ts's stop())

@@ -93,6 +93,35 @@ test("LAN web pages and their same-origin APIs stay accessible without a key", a
 	}
 });
 
+test("LAN web chat submissions forward JSON without a key and preserve acceptance and refusal responses", { timeout: 5000 }, async (t) => {
+	const received: Array<{ path: string; method: string; headers: IncomingHttpHeaders; body: string }> = [];
+	let upstreamStatus = 200;
+	const { webPort } = await fixture(t, async (request, response) => {
+		let body = "";
+		for await (const chunk of request) body += String(chunk);
+		received.push({ path: request.url!, method: request.method!, headers: request.headers, body });
+		response.writeHead(upstreamStatus, { "Content-Type": "application/json" });
+		response.end(upstreamStatus === 200 ? '{"ok":true}' : '{"error":"The selected model is unavailable."}');
+	});
+	const body = JSON.stringify({ chatId: "session", input: { type: "text", text: "Teach me calculus" } });
+	for (const status of [200, 503]) {
+		upstreamStatus = status;
+		const result = await send(webPort, "/api/chat", {
+			method: "POST", body,
+			headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+		});
+		assert.equal(result.status, status);
+		assert.deepEqual(JSON.parse(result.body), status === 200 ? { ok: true } : { error: "The selected model is unavailable." });
+		const forwarded = received.at(-1)!;
+		assert.equal(forwarded.path, "/api/chat");
+		assert.equal(forwarded.method, "POST");
+		assert.equal(forwarded.headers["content-type"], "application/json");
+		assert.equal(forwarded.headers.authorization, undefined);
+		assert.equal(forwarded.body, body);
+	}
+	assert.equal(received.length, 2);
+});
+
 test("public API authenticates every method and refuses cookie, query, malformed, or duplicate credentials", async (t) => {
 	const { apiPort, received } = await fixture(t);
 	for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) {
@@ -110,7 +139,8 @@ test("public API authenticates every method and refuses cookie, query, malformed
 		{ Cookie: `api_key=${KEY}` },
 		{ Authorization: `Basic ${Buffer.from(KEY).toString("base64")}` },
 		{ Authorization: `Bearer ${KEY}, Bearer ${KEY}` },
-		["Authorization", `Bearer ${KEY}`, "Authorization", `Bearer ${KEY}`],
+		// Raw header arrays do not receive http.request's automatic Host.
+		["Host", `127.0.0.1:${apiPort}`, "Authorization", `Bearer ${KEY}`, "Authorization", `Bearer ${KEY}`],
 	]) {
 		assert.equal((await send(apiPort, `/api/graph?api_key=${KEY}`, { headers })).status, 401);
 	}
@@ -159,57 +189,63 @@ test("API forwarding preserves body, path, query and status while stripping cred
 	assert(!result.body.includes(KEY));
 });
 
-test("quiet SSE sends its headers before the upstream emits any frame", { timeout: 5000 }, async (t) => {
-	const { apiPort } = await fixture(t, (_request, response) => {
-		response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
-		response.flushHeaders();
-		// No body is emitted. The downstream handshake must still complete.
-	});
-	await new Promise<void>((resolve, reject) => {
-		const request = httpRequest({
-			hostname: "127.0.0.1", port: apiPort, path: "/api/events",
-			headers: { Authorization: `Bearer ${KEY}` }, agent: false,
-		}, (response) => {
-			assert.equal(response.statusCode, 200);
-			assert.match(String(response.headers["content-type"]), /text\/event-stream/);
-			response.destroy();
-			resolve();
+for (const listener of ["web", "api"] as const) {
+	test(`${listener} quiet SSE sends its headers before the upstream emits any frame`, { timeout: 5000 }, async (t) => {
+		const { webPort, apiPort } = await fixture(t, (_request, response) => {
+			response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+			response.flushHeaders();
+			// No body is emitted. The downstream handshake must still complete.
 		});
-		request.once("error", reject);
-		request.end();
-	});
-});
-
-test("SSE reaches the client before completion and cancelling it closes the upstream stream", { timeout: 5000 }, async (t) => {
-	let upstreamClosed!: () => void;
-	const closed = new Promise<void>((resolve) => { upstreamClosed = resolve; });
-	const { apiPort } = await fixture(t, (_request, response) => {
-		response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
-		response.flushHeaders();
-		response.write("event: activity-changed\ndata: {}\n\n");
-		response.once("close", upstreamClosed);
-		// Deliberately leave the response open; a buffering proxy would hang.
-	});
-	await new Promise<void>((resolve, reject) => {
-		const request = httpRequest({
-			hostname: "127.0.0.1", port: apiPort, path: "/api/events",
-			headers: { Authorization: `Bearer ${KEY}` }, agent: false,
-		}, (response) => {
-			assert.equal(response.statusCode, 200);
-			assert.match(String(response.headers["content-type"]), /text\/event-stream/);
-			let frame = "";
-			response.on("data", (chunk) => {
-				frame += String(chunk);
-				if (frame.includes("\n\n")) {
-					assert.match(frame, /activity-changed/);
-					response.destroy();
-					resolve();
-				}
+		await new Promise<void>((resolve, reject) => {
+			const request = httpRequest({
+				hostname: "127.0.0.1", port: listener === "web" ? webPort : apiPort, path: "/api/events",
+				headers: listener === "api" ? { Authorization: `Bearer ${KEY}` } : undefined, agent: false,
+			}, (response) => {
+				assert.equal(response.statusCode, 200);
+				assert.match(String(response.headers["content-type"]), /text\/event-stream/);
+				response.destroy();
+				resolve();
 			});
-			response.once("error", reject);
+			request.once("error", reject);
+			request.end();
 		});
-		request.once("error", reject);
-		request.end();
 	});
-	await closed;
-});
+
+	test(`${listener} chat SSE reaches the client before completion and cancellation closes the upstream stream`, { timeout: 5000 }, async (t) => {
+		let upstreamClosed!: () => void;
+		const closed = new Promise<void>((resolve) => { upstreamClosed = resolve; });
+		const firstFrame = 'data: {"type":"message_start","message":{"role":"assistant","content":[]}}\n\n';
+		let upstreamTarget: string | undefined;
+		const { webPort, apiPort } = await fixture(t, (request, response) => {
+			upstreamTarget = request.url;
+			response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+			response.flushHeaders();
+			response.write(firstFrame);
+			response.once("close", upstreamClosed);
+			// Deliberately leave the response open; a buffering proxy would hang.
+		});
+		await new Promise<void>((resolve, reject) => {
+			const request = httpRequest({
+				hostname: "127.0.0.1", port: listener === "web" ? webPort : apiPort, path: "/api/chats/session/stream",
+				headers: listener === "api" ? { Authorization: `Bearer ${KEY}` } : undefined, agent: false,
+			}, (response) => {
+				assert.equal(response.statusCode, 200);
+				assert.match(String(response.headers["content-type"]), /text\/event-stream/);
+				let frame = "";
+				response.on("data", (chunk) => {
+					frame += String(chunk);
+					if (frame.includes("\n\n")) {
+						assert.equal(frame, firstFrame);
+						response.destroy();
+						resolve();
+					}
+				});
+				response.once("error", reject);
+			});
+			request.once("error", reject);
+			request.end();
+		});
+		await closed;
+		assert.equal(upstreamTarget, "/api/chats/session/stream");
+	});
+}
