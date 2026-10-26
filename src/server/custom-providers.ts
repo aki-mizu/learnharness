@@ -70,19 +70,24 @@ function positiveInteger(...values: unknown[]): number | undefined {
 	return values.find((v): v is number => typeof v === "number" && Number.isSafeInteger(v) && v > 0);
 }
 
-function discoveryModels(body: unknown): { models: CustomProviderModel[]; needsVisionProbe: boolean } {
+type DiscoveredModel = Omit<CustomProviderModel, "contextWindow"> & {
+	contextWindow: number | undefined;
+	hasModalityMetadata: boolean;
+};
+
+function discoveryModels(body: unknown): DiscoveredModel[] {
 	if (!isObject(body) || !Array.isArray(body.data)) throw new CustomProviderError(502, "Model discovery response must contain a data array");
-	const models = new Map<string, CustomProviderModel>();
-	let hasModalityMetadata = false;
+	const models = new Map<string, DiscoveredModel>();
 	for (const row of body.data) {
 		if (!isObject(row) || typeof row.id !== "string" || !row.id.trim() || row.id !== row.id.trim() || /[\x00-\x1f\x7f]/.test(row.id)) throw new CustomProviderError(502, "Model discovery returned an invalid model ID");
 		if (models.has(row.id)) continue;
 		const architecture = isObject(row.architecture) ? row.architecture : {};
 		const top = isObject(row.top_provider) ? row.top_provider : {};
-		const contextWindow = positiveInteger(row.contextWindow, row.context_length, top.context_length) ?? CUSTOM_MODEL_CONTEXT_WINDOW;
-		const maxTokens = Math.min(positiveInteger(row.maxTokens, row.max_output_tokens, top.max_completion_tokens) ?? CUSTOM_MODEL_MAX_TOKENS, contextWindow);
+		const meta = isObject(row.meta) ? row.meta : {};
+		// llama.cpp's n_ctx is the serving limit; n_ctx_train can be much larger.
+		const contextWindow = positiveInteger(row.contextWindow, row.context_length, top.context_length, meta.n_ctx);
+		const maxTokens = positiveInteger(row.maxTokens, row.max_output_tokens, top.max_completion_tokens) ?? CUSTOM_MODEL_MAX_TOKENS;
 		const modalities = row.input ?? row.input_modalities ?? architecture.input_modalities;
-		if (modalities !== undefined) hasModalityMetadata = true;
 		models.set(row.id, {
 			id: row.id,
 			name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : row.id,
@@ -90,12 +95,10 @@ function discoveryModels(body: unknown): { models: CustomProviderModel[]; needsV
 			maxTokens,
 			input: Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"],
 			reasoning: true,
+			hasModalityMetadata: modalities !== undefined,
 		});
 	}
-	return {
-		models: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)),
-		needsVisionProbe: models.size === 1 && !hasModalityMetadata,
-	};
+	return [...models.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 async function discoveryBody(response: Response): Promise<unknown> {
@@ -118,8 +121,8 @@ async function discoveryBody(response: Response): Promise<unknown> {
 	try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new CustomProviderError(502, "Model discovery returned invalid JSON"); }
 }
 
-/** A server-wide capability is safe to apply only to a single-model catalog. */
-async function discoverVision(config: Omit<CustomProviderRecord, "models">, signal: AbortSignal): Promise<boolean> {
+/** Server-wide properties are safe to apply only to a single-model catalog. */
+async function discoverProperties(config: Omit<CustomProviderRecord, "models">, signal: AbortSignal): Promise<{ contextWindow: number | undefined; vision: boolean } | undefined> {
 	const url = new URL(config.baseUrl);
 	url.pathname = `${url.pathname.replace(/\/v1$/, "").replace(/\/$/, "")}/props`;
 	try {
@@ -131,14 +134,19 @@ async function discoverVision(config: Omit<CustomProviderRecord, "models">, sign
 		});
 		if (!response.ok) {
 			await response.body?.cancel();
-			return false;
+			return undefined;
 		}
 		const body = await discoveryBody(response);
 		signal.throwIfAborted();
-		return isObject(body) && isObject(body.modalities) && body.modalities.vision === true;
+		if (!isObject(body)) return undefined;
+		const generation = isObject(body.default_generation_settings) ? body.default_generation_settings : {};
+		return {
+			contextWindow: positiveInteger(generation.n_ctx),
+			vision: isObject(body.modalities) && body.modalities.vision === true,
+		};
 	} catch {
 		// /props is optional: unsupported endpoints retain their discovered catalog.
-		return false;
+		return undefined;
 	}
 }
 
@@ -158,13 +166,21 @@ async function discover(config: Omit<CustomProviderRecord, "models">, requestSig
 		}
 		const body = await discoveryBody(response);
 		signal.throwIfAborted();
-		const { models, needsVisionProbe } = discoveryModels(body);
-		if (needsVisionProbe && await discoverVision(config, signal)) {
-			models[0]!.input = ["text", "image"];
+		const models = discoveryModels(body);
+		const single = models.length === 1 ? models[0] : undefined;
+		if (single && (single.contextWindow === undefined || !single.hasModalityMetadata)) {
+			const properties = await discoverProperties(config, signal);
+			if (properties) {
+				single.contextWindow ??= properties.contextWindow;
+				if (!single.hasModalityMetadata && properties.vision) single.input = ["text", "image"];
+			}
 		}
 		// Optional probe failures may be ignored; caller cancellation must not save.
 		requestSignal?.throwIfAborted();
-		return models;
+		return models.map(({ id, name, contextWindow, maxTokens, input, reasoning }) => {
+			const limit = contextWindow ?? CUSTOM_MODEL_CONTEXT_WINDOW;
+			return { id, name, contextWindow: limit, maxTokens: Math.min(maxTokens, limit), input, reasoning };
+		});
 	} catch (error) {
 		if (error instanceof CustomProviderError) throw error;
 		// Do not expose upstream bodies, request URLs, or SDK errors containing credentials.

@@ -76,18 +76,33 @@ curl -X DELETE "$lh_api/api/providers/$custom_provider_id"
 
 Discovery reads the upstream OpenAI-style `{"data": [{"id": "my-model"}]}` response. Models become available immediately in `GET /api/models` and in the existing model settings validation. Refresh is explicit: reading a saved custom catalog does not contact its upstream server.
 
-For a single-model catalog without modality metadata, discovery also checks
-the server's `/props` endpoint. A base URL ending in `/v1` uses `/props` beside
-that suffix, preserving earlier path prefixes (`/api/v1` becomes `/api/props`).
-When `modalities.vision` is `true`, the saved model includes `input: ["text", "image"]`,
-making it available in the Vision pickers and enabling image input during inference.
-Explicit modality metadata remains authoritative. Catalogs with multiple models
-do not use this server-wide fallback. An unavailable or invalid `/props` response
-leaves the model list's text-only fallback intact.
+Context discovery uses the first valid positive integer from `contextWindow`,
+`context_length`, `top_provider.context_length`, and `meta.n_ctx` in each model
+entry. For llama.cpp servers, `meta.n_ctx` describes the configured
+context per request/slot. `meta.n_ctx_train` is the model's training maximum and
+is not used as the serving limit.
 
-After updating LearnHarness, use **Refresh Models** on an existing endpoint to
-discover its vision capability, then select it for Vision. Refreshing the catalog
-does not change any model slot selections.
+For a single-model catalog missing context or modality metadata, discovery also
+checks the server's `/props` endpoint once. A base URL ending in `/v1` uses
+`/props` beside that suffix, preserving earlier path prefixes (`/api/v1` becomes
+`/api/props`). The probe uses the connection's credentials and the same discovery
+timeout; cancelling the request prevents saving its results.
+
+If context metadata is missing, a valid `default_generation_settings.n_ctx`
+supplies the configured context window. For example, a server reporting `102400`
+produces a 102,400-token context window (102.4K). If modality metadata is missing
+and `modalities.vision` is `true`, the saved model includes
+`input: ["text", "image"]`, making it available in the Vision pickers and enabling
+image input during inference. Explicit context and modality metadata remain
+authoritative. Catalogs with multiple models do not use this server-wide
+fallback. An unavailable or invalid `/props` response leaves existing metadata
+and the defaults for missing fields intact. Maximum output is capped at the
+final discovered context window.
+
+After redeploying the updated LearnHarness server, use **Refresh Models** on an
+existing endpoint to update its saved context and vision capabilities, then
+select it for Vision if needed. Reading the catalog does not refresh it or
+change any model slot selections.
 
 Custom Endpoint mode applies a fixed reasoning policy to every model: **medium**
 and **xhigh** are the only choices, and **xhigh** is the default. This policy
