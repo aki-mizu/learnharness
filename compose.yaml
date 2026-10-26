@@ -8,7 +8,7 @@ services:
     init: true
 
     ports:
-      - "${BIND_IP:?Set BIND_IP to your LAN or VPN address}:${HOST_PORT:?Set HOST_PORT to an unused port}:3000"
+      - "${BIND_IP:-0.0.0.0}:${HOST_PORT:-3000}:3000"
 
     environment:
       NODE_ENV: production
