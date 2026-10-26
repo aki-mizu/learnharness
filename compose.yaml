@@ -2,7 +2,7 @@ services:
   learnharness:
     # Published after the Docker branch's build and smoke checks pass.
     # Override the image and pull policy to use a local build (docs/docker.md).
-    image: "${LEARNHARNESS_IMAGE:-ghcr.io/aki-mizu/learnharness:docker-0.3.7}"
+    image: "${LEARNHARNESS_IMAGE:-ghcr.io/aki-mizu/learnharness:docker-0.3.8}"
     pull_policy: "${LEARNHARNESS_PULL_POLICY:-always}"
     restart: unless-stopped
     init: true

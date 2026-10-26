@@ -21,7 +21,18 @@
 !public/**
 !scripts/
 !scripts/**
+# Plain-Node subscription controllers used by the web server.
+!electron/
+electron/**
+!electron/chatgpt.cjs
+!electron/chatgpt-ipc.cjs
+!electron/subscriptions.cjs
+!electron/subscription-ipc.cjs
+!electron/subscription-store.cjs
 
 # Never re-include credentials nested inside an allowed source directory.
 **/.env*
 **/auth.json
+**/chatgpt-credentials.json*
+**/github-copilot-credentials.json*
+**/xai-credentials.json*

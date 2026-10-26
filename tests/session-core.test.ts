@@ -231,8 +231,8 @@ describe("postInputEvent (the 409 identity-retry)", { skip: process.env.NO_SLOW 
 // ─── send: optimistic appends + wire consumption ────────────────────────────
 
 describe("HTTP browser sends", () => {
-	beforeEach((t) => {
-		const descriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto")!;
+	const descriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto")!;
+	beforeEach(() => {
 		// LAN and Tailscale HTTP origins expose getRandomValues, but not
 		// randomUUID. Keep the real random source and its required receiver.
 		const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
@@ -240,8 +240,8 @@ describe("HTTP browser sends", () => {
 			configurable: true,
 			value: { getRandomValues },
 		});
-		t.after(() => { Object.defineProperty(globalThis, "crypto", descriptor); });
 	});
+	afterEach(() => { Object.defineProperty(globalThis, "crypto", descriptor); });
 
 	const inputs: ChatInput[] = [
 		{ type: "text", text: "my topic" },

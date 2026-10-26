@@ -64,6 +64,33 @@ try {
 	const website = await fetch(`http://${address}/`, { signal: AbortSignal.timeout(10000) });
 	assert.equal(website.status, 200, "website remains reachable without API-key sign-in");
 	assert.match(await website.text(), /<html/);
+	const webOrigin = `http://${address}`;
+	const subscriptionHeaders = {
+		Origin: webOrigin, "Sec-Fetch-Site": "same-origin",
+		"X-LearnHarness-Subscriptions": "1", "Content-Type": "application/json",
+	};
+	const subscriptionStatus = await fetch(`${webOrigin}/api/subscriptions`, {
+		headers: subscriptionHeaders, signal: AbortSignal.timeout(10000),
+	});
+	assert.equal(subscriptionStatus.status, 200, "web subscription helpers are included in the container");
+	const subscriptions = await subscriptionStatus.json();
+	assert.ok(subscriptions.chatgpt);
+	assert.equal(subscriptions.native.length, 2);
+	const cancelled = await fetch(`${webOrigin}/api/subscriptions`, {
+		method: "POST", headers: subscriptionHeaders,
+		body: JSON.stringify({ providerId: "chatgpt", op: "cancel" }),
+		signal: AbortSignal.timeout(10000),
+	});
+	assert.equal(cancelled.status, 200, "gateway preserves same-origin subscription controls");
+	await cancelled.arrayBuffer();
+	const crossOrigin = await fetch(`${webOrigin}/api/subscriptions`, {
+		method: "POST", headers: { ...subscriptionHeaders, Origin: "https://unrelated.invalid" },
+		body: JSON.stringify({ providerId: "chatgpt", op: "cancel" }),
+		signal: AbortSignal.timeout(10000),
+	});
+	assert.equal(crossOrigin.status, 403, "gateway retains upstream cross-origin rejection");
+	await crossOrigin.arrayBuffer();
+	console.log("[smoke-docker] web subscription status, offline controls and origin checks passed");
 
 	async function publicApi(route, key, method = "GET") {
 		return fetch(`http://${apiAddress}${route}`, {

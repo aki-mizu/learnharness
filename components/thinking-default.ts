@@ -4,8 +4,7 @@
  * default to xhigh and keep only an explicit medium choice; built-in
  * models use DEFAULT_THINKING_ORDER for first assignment and preserve
  * explicit picks for server-side clamping after a model swap. */
-import { DEFAULT_THINKING_ORDER } from "@/src/core";
-import { CUSTOM_DEFAULT_THINKING_LEVEL, customThinkingLevel, isCustomProviderId } from "@/src/core/custom-providers";
+import { CUSTOM_DEFAULT_THINKING_LEVEL, DEFAULT_THINKING_ORDER, customThinkingLevel, isCustomProviderId } from "@/src/core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 /** Display labels for the levels (shared by every trigger that shows

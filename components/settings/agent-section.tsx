@@ -55,11 +55,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MenuShell } from "@/components/menu-shell";
 import { useSettingsSaved } from "@/components/settings-signal";
 import { defaultOrderLevel, populateLevel } from "@/components/thinking-default";
-import { CUSTOM_THINKING_LEVELS, isCustomProviderId } from "@/src/core/custom-providers";
 import type React from "react";
 import {
 	COMPACTION_THRESHOLD_FLOOR,
+	CUSTOM_THINKING_LEVELS,
 	MODEL_SLOTS,
+	isCustomProviderId,
 	resolveSettings,
 	type AgentSettings,
 	type CompactionSettings,

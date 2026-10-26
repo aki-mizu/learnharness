@@ -14,17 +14,17 @@ Portainer's Docker Standalone stacks. It does not configure Docker Swarm.
 ## Images on GitHub Container Registry
 
 The Docker workflow publishes these **Linux amd64** images after its build and
-container smoke checks pass on the `docker/0.3.7` branch:
+container smoke checks pass on the `docker/0.3.8` branch:
 
 | Image | Purpose |
 | --- | --- |
-| `ghcr.io/aki-mizu/learnharness:docker-0.3.7` | Updated on successful branch builds; the Compose default |
+| `ghcr.io/aki-mizu/learnharness:docker-0.3.8` | Updated on successful branch builds; the Compose default |
 | `ghcr.io/aki-mizu/learnharness:sha-<full-commit-sha>` | Identifies the image built from a specific commit |
 
 Push the branch with its Docker changes to GitHub and wait for the **Docker**
 workflow to finish before deploying. Adding these files locally does not create
 an image in GHCR. Pull requests build and test without publishing; `main` also
-only builds and tests. This workflow does not move the existing `v0.3.7` tag or
+only builds and tests. This workflow does not move the existing `v0.3.8` tag or
 publish a `latest` tag.
 
 Publishing uses the repository's `GITHUB_TOKEN` with `packages: write`, so no
@@ -166,6 +166,13 @@ The stack mounts one named volume at `/state`:
 | --- | --- |
 | `/state/data` | Sessions, graph ledgers, jobs, settings, and prompt overrides |
 | `/state/auth.json` | Provider API keys saved through Settings; created with mode `0600` |
+| `/state/chatgpt-credentials.json` | Server-owned ChatGPT connection credentials; mode `0600` |
+| `/state/github-copilot-credentials.json` | Server-owned GitHub Copilot connection credentials; mode `0600` |
+| `/state/xai-credentials.json` | Server-owned Grok connection credentials; mode `0600` |
+
+Subscription credential files are created beside the configured `LH_AUTH_FILE`,
+so the supplied stack preserves them in the same `/state` volume. Browsers using
+this server share its saved connections and background-use consent.
 
 The named volume is initialized with ownership for UID/GID 1000. If you replace
 it with a bind mount or restore files, make that directory writable by UID/GID
@@ -230,8 +237,13 @@ test before tagging and pushing that same image to GHCR on the Docker branch.
 
 ## Differences from the desktop app
 
-Provider API keys work in the container. ChatGPT, GitHub Copilot, and Grok
-subscription sign-in depend on Electron's private IPC connection and are
-unavailable in web-only deployments. Desktop menus and in-app application
-updates are also Electron features; update the container by pulling or building
-its replacement image and redeploying.
+Provider API keys and server-owned subscription connections are available in
+Settings → Providers. GitHub Copilot and Grok use device-code sign-in in your
+browser. ChatGPT sign-in requires its browser callback to reach `127.0.0.1` in
+the server's network namespace. In Docker that is the container's loopback;
+the supplied stack does not route this callback from a host or remote browser.
+See [subscription connections in web/dev](development.md#subscription-connections-in-webdev)
+for the upstream sign-in and shared-server limitations.
+
+Desktop menus and in-app application updates require Electron. Update the
+container by pulling or building its replacement image and redeploying.
