@@ -1,0 +1,39 @@
+services:
+  learnharness:
+    # Published after the Docker branch's build and smoke checks pass.
+    # Override the image and pull policy to use a local build (docs/docker.md).
+    image: "${LEARNHARNESS_IMAGE:-ghcr.io/aki-mizu/learnharness:docker-0.3.7}"
+    pull_policy: "${LEARNHARNESS_PULL_POLICY:-always}"
+    restart: unless-stopped
+    init: true
+
+    ports:
+      - "${BIND_IP:?Set BIND_IP to your LAN or VPN address}:${HOST_PORT:?Set HOST_PORT to an unused port}:3000"
+
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+      LH_DATA_DIR: /state/data
+      LH_AUTH_FILE: /state/auth.json
+      CHROME_PATH: /usr/bin/chromium
+
+    volumes:
+      - learnharness_state:/state
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/graph',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+    stop_grace_period: 60s
+
+volumes:
+  learnharness_state:
