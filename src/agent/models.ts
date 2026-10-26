@@ -11,6 +11,7 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type ModelRole } from "../../config.ts";
 import { DEFAULT_THINKING_ORDER } from "../core/settings.ts";
+import { customThinkingLevel, isCustomProviderId } from "../core/custom-providers.ts";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { chatGPTModel } from "./chatgpt-bridge.ts";
 import { chatGPTStream } from "./chatgpt-stream.ts";
@@ -107,12 +108,13 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 	if (!model) {
 		throw new Error(`${spec.provider} catalog has no model ${spec.id}`);
 	}
-	// UNSET level → the baked default order (first entry the model
-	// supports); SET level → pi's native nearest-clamp (model swaps keep
-	// the user's intent and adapt honestly).
-	const level = spec.thinkingLevel
-		? clampThinkingLevel(model, spec.thinkingLevel)
-		: defaultThinkingLevel(model);
+	// Custom connections use their fixed policy and xhigh default. Native
+	// providers retain Pi's supported-level clamp and baked default order.
+	const level = isCustomProviderId(spec.provider)
+		? customThinkingLevel(spec.thinkingLevel)
+		: spec.thinkingLevel
+			? clampThinkingLevel(model, spec.thinkingLevel)
+			: defaultThinkingLevel(model);
 	return {
 		model,
 		level,

@@ -2,6 +2,13 @@
 export const CUSTOM_PROVIDER_PREFIX = "custom-";
 export const CUSTOM_MODEL_CONTEXT_WINDOW = 32_768;
 export const CUSTOM_MODEL_MAX_TOKENS = 4_096;
+export const CUSTOM_THINKING_LEVELS = ["medium", "xhigh"] as const;
+export const CUSTOM_DEFAULT_THINKING_LEVEL = "xhigh";
+
+/** Custom connections always use the fixed two-level reasoning policy. */
+export function customThinkingLevel(level?: string): (typeof CUSTOM_THINKING_LEVELS)[number] {
+	return level === "medium" ? level : CUSTOM_DEFAULT_THINKING_LEVEL;
+}
 
 export interface CustomProviderModel {
 	id: string;

@@ -48,7 +48,7 @@ The response contains connection metadata and discovered models, never the API k
         "contextWindow": 32768,
         "maxTokens": 4096,
         "input": ["text"],
-        "reasoning": false
+        "reasoning": true
       }
     ]
   }
@@ -76,6 +76,14 @@ curl -X DELETE "$lh_api/api/providers/$custom_provider_id"
 
 Discovery reads the upstream OpenAI-style `{"data": [{"id": "my-model"}]}` response. Models become available immediately in `GET /api/models` and in the existing model settings validation. Refresh is explicit: reading a saved custom catalog does not contact its upstream server.
 
+Custom Endpoint mode applies a fixed reasoning policy to every model: **medium**
+and **xhigh** are the only choices, and **xhigh** is the default. This policy
+does not depend on upstream reasoning metadata or `/props`. The model catalog
+advertises `supportedLevels: ["medium", "xhigh"]`, and inference sends the selected
+value as `reasoning_effort` for OpenAI-compatible endpoints. An explicit medium
+selection is preserved. Off is unavailable; custom inference always uses one
+of the two supported values.
+
 When model metadata is absent, the approved defaults are:
 
 | Property | Fallback |
@@ -83,7 +91,7 @@ When model metadata is absent, the approved defaults are:
 | Context window | 32,768 tokens |
 | Maximum output | 4,096 tokens, capped at the context window |
 | Input | Text only |
-| Reasoning | Disabled |
+| Reasoning | Enabled; medium or xhigh, default xhigh |
 | Pricing | Unknown |
 
 These limits are fallbacks, not guarantees about the upstream model. Discovery cannot verify tool calling or streaming support; the upstream Chat Completions endpoint must support the features needed by the selected agent.

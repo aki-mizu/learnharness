@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setCustomProviderSource } from "../agent/custom-providers.ts";
-import { CUSTOM_MODEL_CONTEXT_WINDOW, CUSTOM_MODEL_MAX_TOKENS, isCustomProviderId, type CustomProviderModel, type CustomProviderRecord } from "../core/custom-providers.ts";
+import { CUSTOM_MODEL_CONTEXT_WINDOW, CUSTOM_MODEL_MAX_TOKENS, CUSTOM_THINKING_LEVELS, isCustomProviderId, type CustomProviderModel, type CustomProviderRecord } from "../core/custom-providers.ts";
 import { stores } from "./stores.ts";
 
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -24,7 +24,11 @@ function publicProvider(record: CustomProviderRecord) {
 		id: record.id,
 		name: record.name,
 		baseUrl: record.baseUrl,
-		models: record.models.map(({ id, name, contextWindow, maxTokens, input, reasoning }) => ({ id, name, contextWindow, maxTokens, input, reasoning })),
+		models: record.models.map(({ id, name, contextWindow, maxTokens, input }) => ({
+			id, name, contextWindow, maxTokens, input,
+			reasoning: true,
+			supportedLevels: [...CUSTOM_THINKING_LEVELS],
+		})),
 		apiKeyPresent: !!record.apiKey,
 		pricingKnown: false as const,
 	};
@@ -83,7 +87,7 @@ function discoveryModels(body: unknown): CustomProviderModel[] {
 			contextWindow,
 			maxTokens,
 			input: Array.isArray(modalities) && modalities.includes("image") ? ["text", "image"] : ["text"],
-			reasoning: row.reasoning === true,
+			reasoning: true,
 		});
 	}
 	return [...models.values()].sort((a, b) => a.id.localeCompare(b.id));

@@ -1,18 +1,11 @@
 "use client";
 
-/**
- * The default-order resolution, CLIENT-SIDE (chunk 2, Platform interlude
- * bd68486): the UI mirrors defaultThinkingLevel from src/agent/models.ts
- * EXACTLY — first DEFAULT_THINKING_ORDER entry the model supports, else
- * the first supported level, else "off". One source of truth for the
- * ordering (the core barrel); this helper is its only client
- * interpretation, so a fresh model pick can auto-populate the SAME
- * level the engine would run for an unset record (owner ruling: the
- * ordering's ONLY purpose is first assignment — an explicit pick always
- * wins, and after a swap the WRITE clamps server-side, the signal
- * re-reads, and the clamped truth displays).
- */
+/** Client-side thinking assignment mirrors the engine: custom endpoints
+ * default to xhigh and keep only an explicit medium choice; built-in
+ * models use DEFAULT_THINKING_ORDER for first assignment and preserve
+ * explicit picks for server-side clamping after a model swap. */
 import { DEFAULT_THINKING_ORDER } from "@/src/core";
+import { CUSTOM_DEFAULT_THINKING_LEVEL, customThinkingLevel, isCustomProviderId } from "@/src/core/custom-providers";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 /** Display labels for the levels (shared by every trigger that shows
@@ -30,17 +23,19 @@ export const THINKING_LABEL: Record<string, string> = {
 	max: "max",
 };
 
-/** The level a fresh pick of `supported` populates with. Empty support
- *  (shouldn't happen — the catalog always reports at least ["off"])
- *  resolves "off", matching the server's fallback. */
-export function defaultOrderLevel(supported: readonly ThinkingLevel[]): ThinkingLevel {
+/** A custom endpoint starts at xhigh. Built-in models use the first
+ *  supported entry in the default order, with off as the empty fallback. */
+export function defaultOrderLevel(supported: readonly ThinkingLevel[], provider?: string): ThinkingLevel {
+	if (isCustomProviderId(provider ?? "")) return CUSTOM_DEFAULT_THINKING_LEVEL;
 	for (const level of DEFAULT_THINKING_ORDER) {
 		if (supported.includes(level)) return level;
 	}
 	return supported[0] ?? "off";
 }
 
-/** An EXPLICIT level always rides — even when the fresh pick's model
+/** Custom endpoints keep medium or use xhigh, including when switching
+ *  from a built-in model with a different level. For built-in models an
+ *  EXPLICIT level always rides — even when the fresh pick's model
  *  doesn't support it: the WRITE clamps it to the nearest supported level
  *  server-side (Platform's interlude bd68486 — the owner's swap-400 case
  *  now just works), and the cross-surface signal re-reads so the clamped
@@ -50,6 +45,8 @@ export function defaultOrderLevel(supported: readonly ThinkingLevel[]): Thinking
 export function populateLevel(
 	explicit: ThinkingLevel | undefined,
 	supported: readonly ThinkingLevel[],
+	provider?: string,
 ): ThinkingLevel {
-	return explicit ?? defaultOrderLevel(supported);
+	if (isCustomProviderId(provider ?? "")) return customThinkingLevel(explicit);
+	return explicit ?? defaultOrderLevel(supported, provider);
 }

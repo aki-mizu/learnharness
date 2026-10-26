@@ -28,7 +28,11 @@ const collectionRoute = await import("../app/api/providers/route.ts");
 const providerRoute = await import("../app/api/providers/[id]/route.ts");
 const refreshRoute = await import("../app/api/providers/[id]/refresh/route.ts");
 const { piModels, piEngineForSpec } = await import("../src/agent/models.ts");
-const { modelCatalog, catalogContextLimits, validateModelsSettings, validateChatSettings } = await import("../src/server/model-catalog.ts");
+const {
+	modelCatalog, catalogContextLimits, catalogDefaultsFor, rolePinsFor,
+	clampModelsLevels, clampChatLevel, validateModelsSettings, validateChatSettings,
+} = await import("../src/server/model-catalog.ts");
+const { resolveSettings } = await import("../src/core/settings-resolution.ts");
 const { providerKeyPresent } = await import("../src/server/keys.ts");
 const { callCost } = await import("../src/server/pricing.ts");
 const { CUSTOM_PROVIDERS_FILE } = await import("../config.ts");
@@ -46,6 +50,7 @@ interface ProviderDto {
 		maxTokens: number;
 		input: ("text" | "image")[];
 		reasoning: boolean;
+		supportedLevels: ("medium" | "xhigh")[];
 	}>;
 }
 function request(method: string, body?: unknown): Request {
@@ -97,7 +102,7 @@ describe("custom provider API", () => {
 		assert.equal(provider.baseUrl, "https://fixture.invalid/v1");
 		assert.equal(provider.apiKeyPresent, true);
 		assert.equal(provider.pricingKnown, false);
-		assert.deepEqual(provider.models, [{ id: "fixture-chat", name: "fixture-chat", contextWindow: 32768, maxTokens: 4096, input: ["text"], reasoning: false }]);
+		assert.deepEqual(provider.models, [{ id: "fixture-chat", name: "fixture-chat", contextWindow: 32768, maxTokens: 4096, input: ["text"], reasoning: true, supportedLevels: ["medium", "xhigh"] }]);
 		assert.equal(requests[0]!.url, "https://fixture.invalid/v1/models");
 		assert.equal(requests[0]!.headers.get("authorization"), `Bearer ${key}`);
 		assert.equal(requests[0]!.redirect, "error");
@@ -132,7 +137,7 @@ describe("custom provider API", () => {
 		const provider = await create();
 		assert.equal(provider.models.length, 2);
 		const vision = provider.models.find((m) => m.id === "vision")!;
-		assert.deepEqual(vision, { id: "vision", name: "Vision fixture", contextWindow: 65536, maxTokens: 8192, input: ["text", "image"], reasoning: true });
+		assert.deepEqual(vision, { id: "vision", name: "Vision fixture", contextWindow: 65536, maxTokens: 8192, input: ["text", "image"], reasoning: true, supportedLevels: ["medium", "xhigh"] });
 		assert.equal(provider.models.find((m) => m.id === "small")!.maxTokens, 2048);
 	});
 
@@ -145,7 +150,8 @@ describe("custom provider API", () => {
 		const catalogEntry = modelCatalog().models.find((m) => m.provider === provider.id && m.id === pin.id)!;
 		assert.ok(catalogEntry);
 		assert.equal(catalogEntry.pricingKnown, false);
-		assert.deepEqual(catalogEntry.supportedLevels, ["off"]);
+		assert.equal(catalogEntry.reasoning, true);
+		assert.deepEqual(catalogEntry.supportedLevels, ["medium", "xhigh"]);
 		assert.equal(catalogContextLimits().get(`${provider.id}:${pin.id}`), 32768);
 		assert.equal(callCost({ inputTokens: 12, outputTokens: 4 }, `${provider.id}:${pin.id}`), null);
 		const engine = piEngineForSpec(pin);
@@ -160,12 +166,48 @@ describe("custom provider API", () => {
 			assert.equal(body.max_tokens, 4096);
 			assert.equal(body.messages[0].role, "system");
 			assert.equal(body.tools[0].function.name, "fixture_tool");
-			assert.equal(body.reasoning_effort, undefined);
+			assert.equal(body.reasoning_effort, "xhigh");
 			return sse(true);
 		} }).result();
 		assert.equal(sent, 1);
 		assert.equal(answer.stopReason, "toolUse", answer.errorMessage);
 		assert.ok(answer.content.some((part) => part.type === "toolCall" && part.name === "fixture_tool" && part.arguments.value === "works"));
+	});
+
+	it("defaults custom reasoning to xhigh and sends medium or xhigh unchanged through the SDK", async () => {
+		const provider = await create();
+		const pin = { provider: provider.id, id: "fixture-chat" };
+		for (const thinkingLevel of [undefined, "medium", "xhigh"] as const) {
+			const expected = thinkingLevel ?? "xhigh";
+			const engine = piEngineForSpec({ ...pin, thinkingLevel });
+			assert.equal(engine.level, expected);
+			let sent = 0;
+			const answer = await engine.streamFn(engine.model, context, { fetch: async (input, init) => {
+				sent++;
+				const body = await new Request(input, init).json();
+				assert.equal(body.reasoning_effort, expected);
+				return sse();
+			} }).result();
+			assert.equal(sent, 1);
+			assert.equal(answer.stopReason, "stop", answer.errorMessage);
+		}
+		assert.equal(catalogDefaultsFor(pin)?.thinkingLevel, "xhigh");
+		assert.equal(catalogDefaultsFor({ ...pin, thinkingLevel: "medium" })?.thinkingLevel, "medium");
+		const effective = resolveSettings({ version: 1, models: { cheap: { model: pin } } });
+		assert.equal(rolePinsFor(effective.agent.models).researcher?.thinkingLevel, "xhigh");
+	});
+
+	it("keeps custom settings writes within medium and xhigh without allowing off", async () => {
+		const provider = await create();
+		const pin = { provider: provider.id, id: "fixture-chat" };
+		assert.equal(clampModelsLevels({ strong: { model: pin } }).strong?.thinkingLevel, "xhigh");
+		assert.equal(clampModelsLevels({ strong: { model: pin, thinkingLevel: "medium" } }).strong?.thinkingLevel, "medium");
+		assert.equal(clampChatLevel({ model: pin, thinkingLevel: "medium" }, null).thinkingLevel, "medium");
+		for (const thinkingLevel of ["off", "minimal", "low", "high", "max"] as const) {
+			assert.equal(clampModelsLevels({ strong: { model: pin, thinkingLevel } }).strong?.thinkingLevel, "xhigh");
+			assert.equal(clampChatLevel({ model: pin, thinkingLevel }, null).thinkingLevel, "xhigh");
+			assert.equal(clampChatLevel({ thinkingLevel }, { ...pin, thinkingLevel: "medium" }).thinkingLevel, "xhigh");
+		}
 	});
 
 	it("supports independent connections with colliding model IDs and keyless servers without ambient authentication", async () => {
