@@ -76,6 +76,19 @@ curl -X DELETE "$lh_api/api/providers/$custom_provider_id"
 
 Discovery reads the upstream OpenAI-style `{"data": [{"id": "my-model"}]}` response. Models become available immediately in `GET /api/models` and in the existing model settings validation. Refresh is explicit: reading a saved custom catalog does not contact its upstream server.
 
+For a single-model catalog without modality metadata, discovery also checks
+the server's `/props` endpoint. A base URL ending in `/v1` uses `/props` beside
+that suffix, preserving earlier path prefixes (`/api/v1` becomes `/api/props`).
+When `modalities.vision` is `true`, the saved model includes `input: ["text", "image"]`,
+making it available in the Vision pickers and enabling image input during inference.
+Explicit modality metadata remains authoritative. Catalogs with multiple models
+do not use this server-wide fallback. An unavailable or invalid `/props` response
+leaves the model list's text-only fallback intact.
+
+After updating LearnHarness, use **Refresh Models** on an existing endpoint to
+discover its vision capability, then select it for Vision. Refreshing the catalog
+does not change any model slot selections.
+
 Custom Endpoint mode applies a fixed reasoning policy to every model: **medium**
 and **xhigh** are the only choices, and **xhigh** is the default. This policy
 does not depend on upstream reasoning metadata or `/props`. The model catalog
@@ -90,7 +103,7 @@ When model metadata is absent, the approved defaults are:
 | --- | --- |
 | Context window | 32,768 tokens |
 | Maximum output | 4,096 tokens, capped at the context window |
-| Input | Text only |
+| Input | Text only, unless a single-model server confirms vision through `/props` |
 | Reasoning | Enabled; medium or xhigh, default xhigh |
 | Pricing | Unknown |
 

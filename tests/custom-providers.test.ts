@@ -16,12 +16,21 @@ process.env.LH_AUTH_FILE = path.join(tmp, "auth.json");
 process.env.OPENAI_API_KEY = "fixture-ambient-key-must-not-leak";
 const originalFetch = globalThis.fetch;
 const requests: Request[] = [];
+const propsRequests: Request[] = [];
 let discovery: (request: Request) => Promise<Response>;
+let propsDiscovery: (request: Request) => Promise<Response>;
 globalThis.fetch = async (input, init) => {
 	const request = new Request(input, init);
-	requests.push(request.clone());
-	assert.equal(new URL(request.url).pathname.endsWith("/models"), true, "unexpected discovery network request");
-	return discovery(request);
+	const pathname = new URL(request.url).pathname;
+	if (pathname.endsWith("/models")) {
+		requests.push(request.clone());
+		return discovery(request);
+	}
+	if (pathname.endsWith("/props")) {
+		propsRequests.push(request.clone());
+		return propsDiscovery(request);
+	}
+	assert.fail("unexpected discovery network request");
 };
 
 const collectionRoute = await import("../app/api/providers/route.ts");
@@ -84,7 +93,9 @@ const context = normalizeContext({ systemPrompt: "Fixture teacher instructions",
 beforeEach(() => {
 	fs.rmSync(CUSTOM_PROVIDERS_FILE, { force: true });
 	requests.length = 0;
+	propsRequests.length = 0;
 	discovery = async () => Response.json({ data: [{ id: "fixture-chat" }] });
+	propsDiscovery = async () => new Response(null, { status: 404 });
 	piModels();
 });
 after(() => {
@@ -139,6 +150,119 @@ describe("custom provider API", () => {
 		const vision = provider.models.find((m) => m.id === "vision")!;
 		assert.deepEqual(vision, { id: "vision", name: "Vision fixture", contextWindow: 65536, maxTokens: 8192, input: ["text", "image"], reasoning: true, supportedLevels: ["medium", "xhigh"] });
 		assert.equal(provider.models.find((m) => m.id === "small")!.maxTokens, 2048);
+	});
+
+	it("discovers loaded vision from props and forwards tool-result images through the SDK", async () => {
+		propsDiscovery = async () => Response.json({ modalities: { vision: true } });
+		const provider = await create({ baseUrl: "https://fixture.invalid/api/v1", apiKey: "fixture-vision-key" });
+		assert.deepEqual(provider.models[0]!.input, ["text", "image"]);
+		assert.equal(propsRequests.length, 1);
+		assert.equal(propsRequests[0]!.url, "https://fixture.invalid/api/props");
+		assert.equal(propsRequests[0]!.headers.get("authorization"), "Bearer fixture-vision-key");
+		assert.equal(propsRequests[0]!.redirect, "error");
+		assert.equal(propsRequests[0]!.cache, "no-store");
+		assert.deepEqual(JSON.parse(fs.readFileSync(CUSTOM_PROVIDERS_FILE, "utf8")).providers[0].models[0].input, ["text", "image"]);
+		assert.deepEqual((await read(provider.id)).models[0]!.input, ["text", "image"]);
+		assert.equal(propsRequests.length, 1, "reading saved models must not probe the endpoint");
+		const catalogEntry = modelCatalog().models.find((model) => model.provider === provider.id)!;
+		assert.deepEqual(catalogEntry.input, ["text", "image"]);
+		const engine = piEngineForSpec({ provider: provider.id, id: "fixture-chat" });
+		assert.deepEqual(engine.model.input, ["text", "image"]);
+		const call = await engine.streamFn(engine.model, context, { fetch: async () => sse(true) }).result();
+		const toolCall = call.content.find((part) => part.type === "toolCall");
+		assert.ok(toolCall && toolCall.type === "toolCall");
+		let sent = 0;
+		const answer = await engine.streamFn(engine.model, normalizeContext({ messages: [
+			...context.messages, call,
+			{ role: "toolResult", toolCallId: toolCall.id, toolName: "fixture_tool", isError: false, timestamp: 2,
+				content: [{ type: "image", data: "fixture-image", mimeType: "image/png" }] },
+		] }), { fetch: async (input, init) => {
+			sent++;
+			const body = await new Request(input, init).json();
+			assert.ok(body.messages.some((message: { content: unknown }) => Array.isArray(message.content)
+				&& message.content.some((part) => part.type === "image_url" && part.image_url.url === "data:image/png;base64,fixture-image")));
+			return sse();
+		} }).result();
+		assert.equal(sent, 1);
+		assert.equal(answer.stopReason, "stop", answer.errorMessage);
+	});
+
+	it("does not replace explicit modalities or apply server-wide props to multiple models", async () => {
+		propsDiscovery = async () => Response.json({ modalities: { vision: true } });
+		for (const data of [
+			[{ id: "fixture-chat", input: ["text"] }],
+			[{ id: "fixture-chat", input: ["text", "image"] }],
+			[{ id: "fixture-chat", input_modalities: ["text"] }],
+			[{ id: "fixture-chat", architecture: { input_modalities: ["text", "image"] } }],
+			[{ id: "first" }, { id: "second" }],
+		]) {
+			discovery = async () => Response.json({ data });
+			await create();
+			assert.equal(propsRequests.length, 0);
+		}
+	});
+
+	it("keeps successful discovery text-only when optional props is unsupported or invalid", async () => {
+		const failures: Array<() => Promise<Response>> = [
+			async () => Response.json({ modalities: { vision: false } }),
+			async () => Response.json({}),
+			async () => Response.json({ modalities: { vision: "true" } }),
+			async () => new Response(null, { status: 404 }),
+			async () => new Response("{broken-json"),
+			async () => new Response("x".repeat(2 * 1024 * 1024 + 1)),
+			async () => { throw new Error("fixture-private-props-transport-error"); },
+		];
+		for (const failure of failures) {
+			propsDiscovery = failure;
+			const provider = await create();
+			assert.deepEqual(provider.models[0]!.input, ["text"]);
+		}
+		assert.equal(propsRequests.length, failures.length);
+		assert.ok(propsRequests.every((request) => request.headers.get("authorization") === null));
+		assert.equal(propsRequests[0]!.url, "https://fixture.invalid/props");
+	});
+
+	it("refreshes loaded vision capability without automatic probes on saved-catalog reads", async () => {
+		propsDiscovery = async () => Response.json({ modalities: { vision: true } });
+		const provider = await create({ baseUrl: "https://fixture.invalid/prefix" });
+		assert.equal(propsRequests[0]!.url, "https://fixture.invalid/prefix/props");
+		assert.deepEqual(provider.models[0]!.input, ["text", "image"]);
+		propsDiscovery = async () => Response.json({ modalities: { vision: false } });
+		const response = await refreshRoute.POST(request("POST"), params(provider.id));
+		assert.equal(response.status, 200);
+		assert.deepEqual((await read(provider.id)).models[0]!.input, ["text"]);
+		assert.deepEqual(piModels().getModel(provider.id, "fixture-chat")!.input, ["text"]);
+		assert.deepEqual(modelCatalog().models.find((model) => model.provider === provider.id)!.input, ["text"]);
+		assert.equal(propsRequests.length, 2);
+	});
+
+	it("treats an optional props timeout as text-only without losing successful model discovery", async () => {
+		const originalTimeout = AbortSignal.timeout;
+		const controller = new AbortController();
+		try {
+			AbortSignal.timeout = () => controller.signal;
+			propsDiscovery = async (request) => {
+				controller.abort(new DOMException("fixture-private-props-timeout", "TimeoutError"));
+				request.signal.throwIfAborted();
+				assert.fail("props signal must be aborted");
+			};
+			const provider = await create();
+			assert.deepEqual(provider.models[0]!.input, ["text"]);
+		} finally { AbortSignal.timeout = originalTimeout; }
+	});
+
+	it("does not persist a provider when the caller cancels during optional props discovery", async () => {
+		const controller = new AbortController();
+		propsDiscovery = async () => {
+			controller.abort(new Error("fixture-private-cancellation"));
+			return Response.json({ modalities: { vision: true } });
+		};
+		const response = await collectionRoute.POST(new Request("http://localhost/api/providers", {
+			method: "POST", body: JSON.stringify({ name: "Cancelled", baseUrl: "https://fixture.invalid/v1" }), signal: controller.signal,
+		}));
+		assert.ok(!response.ok);
+		assert.ok(!(await response.text()).includes("fixture-private-cancellation"));
+		assert.deepEqual(await (await collectionRoute.GET()).json(), { providers: [] });
 	});
 
 	it("immediately federates models into settings, context limits and actual SDK tool streams with unknown pricing", async () => {
