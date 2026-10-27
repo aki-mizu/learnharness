@@ -46,7 +46,7 @@ The response contains connection metadata and discovered models, never the API k
         "id": "my-model",
         "name": "my-model",
         "contextWindow": 32768,
-        "maxTokens": 16384,
+        "maxTokens": 32768,
         "input": ["text"],
         "reasoning": true
       }
@@ -98,7 +98,7 @@ authoritative. Catalogs with multiple models do not use this server-wide
 fallback. An unavailable or invalid `/props` response leaves existing metadata
 and the defaults for missing fields intact. Maximum output uses the first valid
 positive integer from `maxTokens`, `max_output_tokens`, or
-`top_provider.max_completion_tokens`, falling back to 16,384 tokens when those
+`top_provider.max_completion_tokens`, falling back to 32,768 tokens when those
 fields are absent. It is capped at the final discovered context window, and
 inference may reduce it further to fit the prompt and the SDK's context reserve.
 The output budget includes generated reasoning as well as the final answer.
@@ -106,8 +106,8 @@ The output budget includes generated reasoning as well as the final answer.
 After redeploying the updated LearnHarness server, use **Refresh Models** on an
 existing endpoint to update its saved context, vision capabilities, and output
 limit, then select it for Vision if needed. This also replaces the previous
-4,096-token fallback when the endpoint omits output metadata. Reading the catalog
-does not refresh it or change any model slot selections.
+4,096- or 16,384-token fallback when the endpoint omits output metadata. Reading
+the catalog does not refresh it or change any model slot selections.
 
 Custom Endpoint mode applies a fixed reasoning policy to every model: **medium**
 and **xhigh** are the only choices, and **xhigh** is the default. This policy
@@ -122,7 +122,7 @@ When model metadata is absent, the approved defaults are:
 | Property | Fallback |
 | --- | --- |
 | Context window | 32,768 tokens |
-| Maximum output | 16,384 tokens, capped at the context window |
+| Maximum output | 32,768 tokens, capped at the context window |
 | Input | Text only, unless a single-model server confirms vision through `/props` |
 | Reasoning | Enabled; medium or xhigh, default xhigh |
 | Pricing | Unknown |

@@ -113,7 +113,7 @@ describe("custom provider API", () => {
 		assert.equal(provider.baseUrl, "https://fixture.invalid/v1");
 		assert.equal(provider.apiKeyPresent, true);
 		assert.equal(provider.pricingKnown, false);
-		assert.deepEqual(provider.models, [{ id: "fixture-chat", name: "fixture-chat", contextWindow: 32768, maxTokens: 16384, input: ["text"], reasoning: true, supportedLevels: ["medium", "xhigh"] }]);
+		assert.deepEqual(provider.models, [{ id: "fixture-chat", name: "fixture-chat", contextWindow: 32768, maxTokens: 32768, input: ["text"], reasoning: true, supportedLevels: ["medium", "xhigh"] }]);
 		assert.equal(requests[0]!.url, "https://fixture.invalid/v1/models");
 		assert.equal(requests[0]!.headers.get("authorization"), `Bearer ${key}`);
 		assert.equal(requests[0]!.redirect, "error");
@@ -206,7 +206,7 @@ describe("custom provider API", () => {
 			propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: value } });
 			const provider = await create();
 			assert.equal(provider.models[0]!.contextWindow, 32768);
-			assert.equal(provider.models[0]!.maxTokens, 16384);
+			assert.equal(provider.models[0]!.maxTokens, 32768);
 		}
 		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 102400 } });
 		const provider = await create();
@@ -342,6 +342,7 @@ describe("custom provider API", () => {
 	});
 
 	it("immediately federates models into settings, context limits and actual SDK tool streams with unknown pricing", async () => {
+		propsDiscovery = async () => Response.json({ default_generation_settings: { n_ctx: 102400 } });
 		const provider = await create({ apiKey: "fixture-sdk-key" });
 		const pin = { provider: provider.id, id: "fixture-chat" };
 		assert.equal(providerKeyPresent(provider.id), true);
@@ -352,7 +353,7 @@ describe("custom provider API", () => {
 		assert.equal(catalogEntry.pricingKnown, false);
 		assert.equal(catalogEntry.reasoning, true);
 		assert.deepEqual(catalogEntry.supportedLevels, ["medium", "xhigh"]);
-		assert.equal(catalogContextLimits().get(`${provider.id}:${pin.id}`), 32768);
+		assert.equal(catalogContextLimits().get(`${provider.id}:${pin.id}`), 102400);
 		assert.equal(callCost({ inputTokens: 12, outputTokens: 4 }, `${provider.id}:${pin.id}`), null);
 		const engine = piEngineForSpec(pin);
 		let sent = 0;
@@ -363,7 +364,7 @@ describe("custom provider API", () => {
 			assert.equal(req.headers.get("authorization"), "Bearer fixture-sdk-key");
 			assert.equal(body.model, pin.id);
 			assert.equal(body.stream, true);
-			assert.equal(body.max_tokens, 16384);
+			assert.equal(body.max_tokens, 32768);
 			assert.equal(body.messages[0].role, "system");
 			assert.equal(body.tools[0].function.name, "fixture_tool");
 			assert.equal(body.reasoning_effort, "xhigh");
