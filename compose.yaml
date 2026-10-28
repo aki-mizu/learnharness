@@ -1,0 +1,46 @@
+services:
+  learnharness:
+    # Published after the Docker branch's build and smoke checks pass.
+    # Override the image and pull policy to use a local build (docs/docker.md).
+    image: "${LEARNHARNESS_IMAGE:-ghcr.io/aki-mizu/learnharness:docker-0.3.9}"
+    pull_policy: "${LEARNHARNESS_PULL_POLICY:-always}"
+    restart: unless-stopped
+    init: true
+
+    ports:
+      # Keep the website's existing interface and port settings.
+      - target: &web_port 8080
+        published: "${HOST_PORT:-3000}"
+        host_ip: "${BIND_IP:-0.0.0.0}"
+      - target: &api_port 8081
+        published: "${API_PORT:-3005}"
+        host_ip: "${API_BIND_IP:-0.0.0.0}"
+
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      LH_DATA_DIR: /state/data
+      LH_AUTH_FILE: /state/auth.json
+      CHROME_PATH: /usr/bin/chromium
+      LH_WEB_PORT: *web_port
+      LH_API_PORT: *api_port
+      LH_SERVER_API_KEY: "${LH_SERVER_API_KEY:?Set LH_SERVER_API_KEY to a random server API key}"
+
+    volumes:
+      - learnharness_state:/state
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+process.env.LH_API_PORT+'/api/graph',{headers:{Authorization:'Bearer '+process.env.LH_SERVER_API_KEY},signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+    stop_grace_period: 60s
+
+volumes:
+  learnharness_state:

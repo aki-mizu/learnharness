@@ -20,7 +20,7 @@
  *   native replacement for lastAssistantMessageIsCompleteWithToolCalls.
  */
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { absorbed, pendingCallTool, SessionModel } from "../components/session-core.ts";
 import type { ChatInput } from "../src/core/input-events.ts";
 import type { LhMessage } from "../src/core/native-messages.ts";
@@ -229,6 +229,63 @@ describe("postInputEvent (the 409 identity-retry)", { skip: process.env.NO_SLOW 
 });
 
 // ─── send: optimistic appends + wire consumption ────────────────────────────
+
+describe("HTTP browser sends", () => {
+	const descriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto")!;
+	beforeEach(() => {
+		// LAN and Tailscale HTTP origins expose getRandomValues, but not
+		// randomUUID. Keep the real random source and its required receiver.
+		const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+		Object.defineProperty(globalThis, "crypto", {
+			configurable: true,
+			value: { getRandomValues },
+		});
+	});
+	afterEach(() => { Object.defineProperty(globalThis, "crypto", descriptor); });
+
+	const inputs: ChatInput[] = [
+		{ type: "text", text: "my topic" },
+		{ type: "thinking", problemCallId: "problem-1", text: "my attempt" },
+		{ type: "next" },
+		{ type: "answer", toolCallId: "quiz-1", answer: dismissedAnswer("quiz", "Q?") },
+	];
+	for (const input of inputs) {
+		it(`submits ${input.type} and receives a reply without randomUUID`, async () => {
+			const posts: string[] = [];
+			const reply = assistantMsg("reply-1", "hello there");
+			const m = model({
+				fetch: dietFetch({
+					onPost: (body) => posts.push(body),
+					stream: () => sseResponse(
+						{ type: "message_start", message: reply },
+						{ type: "message_end", message: reply },
+						"[DONE]",
+					),
+				}),
+			});
+			await m.send(input);
+			assert.equal(posts.length, 1);
+			assert.deepEqual(JSON.parse(posts[0]!), { chatId: "chat_x", input });
+			assert.equal(m.getState().messages.at(-1)!.parts.at(-1)!.text, "hello there");
+			assert.equal(m.status, "ready");
+			assert.equal(m.readyRef, true, "the next send remains available");
+		});
+	}
+
+	it("surfaces message preparation failures instead of staying submitted", async (t) => {
+		t.mock.method(globalThis.crypto, "getRandomValues", () => {
+			throw new Error("Message preparation failed");
+		});
+		let requests = 0;
+		const m = model({
+			fetch: async () => { requests++; return Response.json({ ok: true }); },
+		});
+		await assert.doesNotReject(() => m.send({ type: "text", text: "my topic" }));
+		assert.equal(requests, 0);
+		assert.equal(m.status, "error");
+		assert.equal(m.getState().error?.message, "Message preparation failed");
+	});
+});
 
 describe("send (one input event, verbatim consumption)", () => {
 	it("optimistically appends the text, POSTs {chatId, input}, consumes to [DONE]", async () => {

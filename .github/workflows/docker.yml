@@ -1,0 +1,68 @@
+name: Docker
+
+on:
+  push:
+    branches: [main, docker/0.3.9]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    name: Build and smoke-test Linux container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Validate Portainer Compose configuration
+        run: docker compose config --quiet
+        env:
+          BIND_IP: "127.0.0.1"
+          HOST_PORT: "3000"
+          LH_SERVER_API_KEY: "docker-compose-validation-not-a-real-server-key"
+      - name: Build the production image
+        run: |
+          docker build --platform linux/amd64 \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.licenses=AGPL-3.0-only" \
+            --tag learnharness:local .
+      - name: Verify startup, rendering, streaming and persistent storage
+        run: node scripts/smoke-docker.mjs
+      - name: Validate multiuser Portainer Compose configuration
+        run: docker compose --file compose.multiuser.yaml config --quiet
+        env:
+          LH_SERVER_API_KEY: "docker-compose-validation-primary-key"
+          LH_SECONDARY_API_KEY: "docker-compose-validation-secondary-key"
+      - name: Verify isolated users, web selection and key rotation
+        run: node scripts/smoke-docker-multiuser.mjs
+      # PRs only build/test. Publish the exact tested image from the Docker
+      # branch; the existing v0.3.9 release tag is not moved or republished.
+      - name: Publish the tested image to GHCR
+        if: github.ref == 'refs/heads/docker/0.3.9' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ghcr_image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker tag learnharness:local "$ghcr_image:sha-$GITHUB_SHA"
+          docker tag learnharness:local "$ghcr_image:docker-0.3.9"
+          docker push "$ghcr_image:sha-$GITHUB_SHA"
+          docker push "$ghcr_image:docker-0.3.9"
+          {
+            printf 'Published Linux amd64 image: `%s:docker-0.3.9`\n\n' "$ghcr_image"
+            printf 'Commit image: `%s:sha-%s`\n' "$ghcr_image" "$GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"

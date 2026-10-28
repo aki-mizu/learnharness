@@ -1,0 +1,38 @@
+# Only application sources and build inputs enter the context. This excludes
+# local sessions, provider keys, environment files, installers and node_modules.
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!next.config.ts
+!postcss.config.mjs
+!config.ts
+!proxy.ts
+!LICENSE
+!app/
+!app/**
+!components/
+!components/**
+!lib/
+!lib/**
+!src/
+!src/**
+!public/
+!public/**
+!scripts/
+!scripts/**
+# Plain-Node subscription controllers used by the web server.
+!electron/
+electron/**
+!electron/chatgpt.cjs
+!electron/chatgpt-ipc.cjs
+!electron/subscriptions.cjs
+!electron/subscription-ipc.cjs
+!electron/subscription-store.cjs
+
+# Never re-include credentials nested inside an allowed source directory.
+**/.env*
+**/auth.json
+**/chatgpt-credentials.json*
+**/github-copilot-credentials.json*
+**/xai-credentials.json*

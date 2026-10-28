@@ -60,7 +60,9 @@ import { Hint } from "@/components/ui/hint";
 import type React from "react";
 import {
 	COMPACTION_THRESHOLD_FLOOR,
+	CUSTOM_THINKING_LEVELS,
 	MODEL_SLOTS,
+	isCustomProviderId,
 	resolveSettings,
 	type AgentSettings,
 	type CompactionSettings,
@@ -598,7 +600,9 @@ export function AgentSection({
 					// catalog); the standard ladder as the last fallback.
 					const coord = override?.model ?? pin?.model;
 					const chosen = coord ? catalog?.find((m) => m.id === coord.id && m.provider === coord.provider) : undefined;
-					const levels = chosen ? chosen.supportedLevels : THINKING_LEVELS;
+					const customProvider = isCustomProviderId(coord?.provider ?? "");
+					const levels = customProvider ? CUSTOM_THINKING_LEVELS : chosen ? chosen.supportedLevels : THINKING_LEVELS;
+					const effectiveThinking = thinking || (chosen ? defaultOrderLevel(levels, coord?.provider) : undefined);
 					const thisMenuOpen = openMenu?.target === slot ? openMenu.kind : null;
 					// Vision slots pick from image-capable models only.
 					const slotCatalog =
@@ -628,10 +632,8 @@ export function AgentSection({
 									widthClass="min-w-20"
 								/>
 								<MenuTrigger
-									// Legacy display (chunk 2 item 4): no stored level + a known
-									// model → the RESOLVED level (the ordering's first supported —
-									// what the engine build runs). Display-only until a pick writes.
-									value={thinking || (chosen ? defaultOrderLevel(levels) : "")}
+									// Display the provider's runtime assignment without writing.
+									value={effectiveThinking ?? ""}
 									emptyLabel="—"
 									ariaLabel={`${SLOT_META[slot].label} thinking`}
 									testid={`slot-thinking-${slot}`}
@@ -651,10 +653,9 @@ export function AgentSection({
 											effectiveId={modelId}
 											effectiveProvider={provider}
 											onPick={(entry) => {
-												// Auto-populate (chunk 2, owner: "populate everywhere"): the
-												// fresh pick writes a level — the stored one rides as-is
-												// (the write clamps server-side), else the ordering's level.
-												const next = populateLevel(thinking || undefined, entry.supportedLevels);
+												// Custom picks keep medium or use xhigh; built-in
+												// levels retain the server-clamped carry behavior.
+												const next = populateLevel(thinking || undefined, entry.supportedLevels, entry.provider);
 												onModelsChange(composeSlotModel(models, slot, entry.provider, entry.id, next));
 												setOpenMenu(null);
 											}}
@@ -677,7 +678,7 @@ export function AgentSection({
 											levels={levels.map(String)}
 											// The ✓ sits on the RESOLVED level for legacy unset records —
 											// the same one the trigger shows.
-											effectiveLevel={thinking || (chosen ? defaultOrderLevel(levels) : undefined)}
+											effectiveLevel={effectiveThinking}
 											onPick={(level) => {
 												onModelsChange(composeSlotModel(models, slot, provider, modelId, level));
 												setOpenMenu(null);

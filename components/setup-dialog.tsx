@@ -40,7 +40,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
 import type React from "react";
-import { type ModelCatalogEntry, type ModelSlotName, type ModelsSettings } from "@/src/core";
+import { CUSTOM_THINKING_LEVELS, isCustomProviderId, type ModelCatalogEntry, type ModelSlotName, type ModelsSettings } from "@/src/core";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList } from "@/components/settings/model-menu";
 import { MenuShell } from "@/components/menu-shell";
@@ -103,16 +103,14 @@ export function prefillFromSlots(
 	return pre;
 }
 
-/** Level prefill (chunk 2): a pinned tier opens with its STORED level
- *  as-is (Save clamps server-side if the ladder lapsed), else the
- *  ordering's level for that model — the level a fresh pick would
- *  populate (owner: the ordering's only purpose is first assignment).
+/** Pinned tiers keep their stored level, or populate the provider's
+ *  default on first pick.
  *  Exported pure for tests. */
 export function prefillLevelFromPin(
 	entry: ModelCatalogEntry,
 	pin: { thinkingLevel?: ThinkingLevel } | null | undefined,
 ): ThinkingLevel {
-	return populateLevel(pin?.thinkingLevel, entry.supportedLevels);
+	return pin?.thinkingLevel ?? defaultOrderLevel(entry.supportedLevels, entry.provider);
 }
 
 /** Stage 1's pure body — exported for SSR pins (the delete/settings
@@ -399,9 +397,10 @@ function OpenSetupDialog({ onClose, onDone }: SetupDialogProps) {
 		setError(null);
 		const models: ModelsSettings = {};
 		for (const slot of SLOT_ORDER) {
+			const entry = picked[slot]!;
 			const level = levels[slot];
 			models[slot] = {
-				model: { provider: picked[slot]!.provider, id: picked[slot]!.id },
+				model: { provider: entry.provider, id: entry.id },
 				...(level ? { thinkingLevel: level } : {}),
 			};
 		}
@@ -478,10 +477,11 @@ function OpenSetupDialog({ onClose, onDone }: SetupDialogProps) {
 						</p>
 						{SLOT_ORDER.map((slot) => {
 							const entry = picked[slot];
+							const customProvider = isCustomProviderId(entry?.provider ?? "");
 							const level = levels[slot];
 							const metadata = catalog?.models.find((m) => m.id === entry?.id && m.provider === entry.provider);
 							// Unavailable metadata cannot erase or clamp a saved preference.
-							const levelsForEntry = metadata?.supportedLevels ?? (entry ? Object.keys(THINKING_LABEL) : []);
+							const levelsForEntry = customProvider ? CUSTOM_THINKING_LEVELS : metadata?.supportedLevels ?? (entry ? Object.keys(THINKING_LABEL) : []);
 							const available = catalog?.models ?? (failed ? [] : undefined);
 							const slotCatalog = slot === "vision" ? available?.filter((m) => m.input.includes("image")) : available;
 							return (
@@ -540,13 +540,11 @@ function OpenSetupDialog({ onClose, onDone }: SetupDialogProps) {
 														onPick={(m) => {
 															editedSlots.current.add(slot);
 															setPicked((prev) => ({ ...prev, [slot]: m }));
-															// Auto-populate (chunk 2, owner: "populate
-															// everywhere"): no explicit level → the
-															// ordering's level for the fresh pick; an
-															// explicit one rides (Save clamps server-side).
+															// Custom picks keep medium or use xhigh;
+															// built-in picks retain their existing policy.
 															setLevels((prev) => ({
 																...prev,
-																[slot]: populateLevel(prev[slot], m.supportedLevels),
+																[slot]: populateLevel(prev[slot], m.supportedLevels, m.provider),
 															}));
 															setOpenMenu(null);
 														}}

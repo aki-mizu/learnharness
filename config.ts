@@ -111,6 +111,10 @@ export const GRAPH_FORMAT_FILE = path.join(PATHS.graph, "format.json");
  */
 export const SETTINGS_FILE = path.join(DATA_ROOT, "settings.json");
 
+/** Private custom endpoint configurations and cached model catalogs.
+ * Contains optional API keys; the store writes this file atomically at 0600. */
+export const CUSTOM_PROVIDERS_FILE = path.join(DATA_ROOT, "custom-providers.json");
+
 /**
  * User prompt-override files (settings-storage wave, 2026-09-19): the
  * per-segment system-prompt overrides mirroring the SOURCE layout

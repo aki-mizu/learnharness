@@ -6,10 +6,9 @@
  * /api/settings/* — the per-chat settings PUT is retired from the UI;
  * legacy records' per-chat overrides still resolve server-side).
  *
- * pi-ai owns ALL the data: the catalog (id/name/cost/context/modality/
- * thinkingLevelMap) and the per-model thinking truth
- * (getSupportedThinkingLevels / clampThinkingLevel). This module only
- * projects and validates — no second registry to drift out of sync.
+ * pi-ai owns the native catalog and per-model thinking support. Custom
+ * connections apply their fixed medium/xhigh policy in the registry and
+ * share its default with these catalog projections and settings writes.
  *
  * Federation: `getModels()` is called per keyed provider (federated, the
  * model-slots wave), so a provider appears in the picker exactly when its
@@ -37,6 +36,8 @@ function connectionProviderIds(): string[] { return [...piModels().getProviders(
 import { settingsStore } from "../store/settings.ts";
 import { effectiveSettings } from "./stores.ts";
 import { keyValue } from "./keys.ts";
+import { listCustomProviders } from "./custom-providers.ts";
+import { customThinkingLevel, isCustomProviderId } from "../core/custom-providers.ts";
 import type { ChatSettings } from "../core/contracts/chat.ts";
 import type {
 	CatalogDefaults,
@@ -52,6 +53,10 @@ import { BACKGROUND_MODEL_ROLES, MODEL_SLOTS, type BackgroundModelRole, type Mod
 
 /** The picker's client-safe model entry (contract: core/contracts/models.ts). */
 export type ModelDto = ModelCatalogEntry;
+
+function catalogThinkingLevel(provider: string, level?: ThinkingLevel): ThinkingLevel | undefined {
+	return isCustomProviderId(provider) ? customThinkingLevel(level) : level;
+}
 
 /**
  * The conversation agents' resolved default (pure form — the strong slot
@@ -70,7 +75,7 @@ export function catalogDefaultsFor(
 ): CatalogDefaults | null {
 	const model = strong ? { provider: strong.provider, id: strong.id } : undefined;
 	if (!model) return null;
-	const level = strong?.thinkingLevel;
+	const level = catalogThinkingLevel(model.provider, strong?.thinkingLevel);
 	return {
 		model,
 		...(level !== undefined ? { thinkingLevel: level } : {}),
@@ -93,10 +98,11 @@ export function rolePinsFor(
 	const pins = {} as RolePins;
 	for (const role of BACKGROUND_MODEL_ROLES) {
 		const spec = models[role];
+		const level = spec ? catalogThinkingLevel(spec.provider, spec.thinkingLevel) : undefined;
 		pins[role] = spec
 			? {
 					model: { provider: spec.provider, id: spec.id },
-					...(spec.thinkingLevel !== undefined ? { thinkingLevel: spec.thinkingLevel } : {}),
+					...(level !== undefined ? { thinkingLevel: level } : {}),
 				}
 			: null;
 	}
@@ -120,10 +126,11 @@ export function catalogSlots(): SlotPins {
 	const pins = {} as SlotPins;
 	for (const name of ["strong", "cheap", "vision"] as const) {
 		const slot: EffectiveSlot | null = slots[name];
+		const level = slot ? catalogThinkingLevel(slot.provider, slot.thinkingLevel) : undefined;
 		pins[name] = slot
 			? {
 					model: { provider: slot.provider, id: slot.id },
-					...(slot.thinkingLevel !== undefined ? { thinkingLevel: slot.thinkingLevel } : {}),
+					...(level !== undefined ? { thinkingLevel: level } : {}),
 				}
 			: null;
 	}
@@ -142,6 +149,7 @@ export function catalogProviders(): CatalogProvider[] {
 	})).concat([
 		{ id: "chatgpt", envVar: "", keyPresent: chatGPTConnected() },
 		...NATIVE_SUBSCRIPTIONS.map((p) => ({ id: p.logicalId, envVar: "", keyPresent: nativeSubscriptionConnected(p.providerId) })),
+		...listCustomProviders().map((p) => ({ id: p.id, envVar: "", keyPresent: true })),
 	]).sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -169,6 +177,7 @@ export function toModelDto(model: Model<Api>): ModelDto {
 		},
 		contextWindow: model.contextWindow,
 		maxTokens: model.maxTokens,
+		...(isCustomProviderId(model.provider) ? { pricingKnown: false } : {}),
 	};
 }
 
@@ -290,6 +299,7 @@ function validateSlotSpec(name: ModelSlotName, slot: { model?: { provider: strin
 /** Clamp one level against one model. Preserve the preference when metadata
  *  is unavailable for an unchanged saved pin; runtime clamps after reconnect. */
 function clampLevelFor(provider: string, id: string, level: ThinkingLevel): ThinkingLevel {
+	if (isCustomProviderId(provider)) return customThinkingLevel(level);
 	const model = connectionModel(provider, id);
 	return model ? clampThinkingLevel(model, level) : level;
 }
@@ -303,11 +313,12 @@ export function clampModelsLevels(settings: ModelsSettings): ModelsSettings {
 	for (const name of MODEL_SLOTS) {
 		const slot = settings[name];
 		if (!slot?.model) continue;
+		const level = catalogThinkingLevel(slot.model.provider, slot.thinkingLevel);
 		out[name] =
-			slot.thinkingLevel !== undefined
+			level !== undefined
 				? {
 						model: slot.model,
-						thinkingLevel: clampLevelFor(slot.model.provider, slot.model.id, slot.thinkingLevel),
+						thinkingLevel: clampLevelFor(slot.model.provider, slot.model.id, level),
 					}
 				: slot;
 	}

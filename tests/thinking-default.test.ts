@@ -57,3 +57,27 @@ describe("populateLevel — an explicit pick always rides; absence populates", (
 		assert.equal(populateLevel("off", tl(["off"])), "off");
 	});
 });
+
+describe("custom endpoint thinking", () => {
+	const provider = "custom-79a73179-78ae-4f73-bd14-6a1439f74bf7";
+	const supported = tl(["medium", "xhigh"]);
+
+	it("defaults to xhigh instead of the built-in medium order", () => {
+		assert.equal(defaultOrderLevel(supported, provider), "xhigh");
+		assert.equal(populateLevel(undefined, supported, provider), "xhigh");
+	});
+
+	it("preserves either allowed explicit choice", () => {
+		assert.equal(populateLevel("medium", supported, provider), "medium");
+		assert.equal(populateLevel("xhigh", supported, provider), "xhigh");
+	});
+
+	it("populates a valid custom level when switching from a built-in model", () => {
+		assert.equal(populateLevel("high", supported, provider), "xhigh");
+	});
+
+	it("leaves built-in defaults and explicit level carries unchanged", () => {
+		assert.equal(defaultOrderLevel(supported, "openrouter"), "medium");
+		assert.equal(populateLevel("off", supported, "openrouter"), "off");
+	});
+});

@@ -109,6 +109,29 @@ test("cached setup is immediately usable; fresh metadata/untouched slots update 
 	});
 });
 
+test("cached custom selections default to xhigh and retain medium edits through catalog refresh", async () => {
+	installFetch();
+	const custom: ModelCatalogEntry = { ...a, id: "custom-model", provider: "custom-79a73179-78ae-4f73-bd14-6a1439f74bf7", supportedLevels: ["medium", "xhigh"] };
+	const body = catalog();
+	body.models.push(custom);
+	body.providers.push({ id: custom.provider, envVar: "", keyPresent: true });
+	body.slots.strong = { model: { provider: custom.provider, id: custom.id } };
+	await warm(body); await render(<><Reader />{setup()}</>);
+	assert.equal(element("setup-thinking-strong").textContent?.trim(), "xhigh▾");
+	await click("setup-thinking-strong"); assert.deepEqual(levels(), ["medium", "xhigh✓"]);
+	await click("thinking-option-medium");
+	await click("setup-trigger-cheap"); await click("model-option-custom-model");
+	assert.equal(element("setup-thinking-cheap").textContent?.trim(), "xhigh▾");
+	await answer(1, body);
+	assert.equal(element("setup-thinking-strong").textContent?.trim(), "medium▾");
+	await click("setup-save");
+	assert.deepEqual(writes[0], {
+		strong: { model: { provider: custom.provider, id: custom.id }, thinkingLevel: "medium" },
+		cheap: { model: { provider: custom.provider, id: custom.id }, thinkingLevel: "xhigh" },
+		vision: { model: { provider: a.provider, id: a.id }, thinkingLevel: "low" },
+	});
+});
+
 test("zero providers always means exclusive connection stage; reconnect with all saved slots only closes, even if every selection remains unavailable", async () => {
 	installFetch(); await warm();
 	let closed = 0, completed = 0;

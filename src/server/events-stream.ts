@@ -15,8 +15,9 @@
  *
  * Wire dialect mirrors the turn stream (pi/ui-stream.ts): text/event-stream,
  * no-cache/no-transform, X-Accel-Buffering off — plus a `: ping` comment
- * every 25s to keep any intermediary from idling the socket out (locally
- * unnecessary, harmless, and it makes dead-connection detection cheap).
+ * immediately on connection and every 25s to keep any intermediary from
+ * idling the socket out (locally unnecessary, harmless, and it makes
+ * dead-connection detection cheap).
  *
  * The DIFFERENCE from the turn stream is lifetime: a turn's stream ends at
  * settle ([DONE]); this channel ends when the CLIENT goes away — cancel()
@@ -61,6 +62,10 @@ export function eventsResponse(): Response {
 				const { type, ...payload } = event;
 				frame(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
 			});
+			// Next flushes response headers with the first body chunk. Start
+			// the connection now so quiet streams can attach before an event
+			// or the first 25-second heartbeat. SSE clients ignore comments.
+			frame(": ping\n\n");
 			heartbeat = setInterval(() => frame(": ping\n\n"), 25_000);
 
 			teardown = stop;
